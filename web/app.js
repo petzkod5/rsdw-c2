@@ -390,6 +390,7 @@ function connectedPlayers() {
   const reading = data?.metrics?.players;
   const players = data?.playerRoster?.players;
   const age = Date.now() - Date.parse(reading?.observedAt);
+  const playerField = (value, fallback) => escapeHTML(typeof value === 'string' && value.trim() ? value : fallback);
   let content = '<p class="no-results">Connected players are unavailable.</p>';
   if (data?.server?.id === selectedServer()?.id) {
     if (reading?.status === 'stale' || (reading?.status === 'available' && (!Number.isFinite(age) || age > 45000 || age < -5000))) {
@@ -398,7 +399,7 @@ function connectedPlayers() {
       content = '<p class="no-results">Connected players are unavailable. The latest collection failed.</p>';
     } else if (reading?.status === 'available' && Number.isFinite(reading.value) && Array.isArray(players)) {
       if (players.length) {
-        content = `<ul class="player-roster">${players.map((player) => `<li><dl><div><dt>Name</dt><dd>${escapeHTML(player.name?.trim() ? player.name : 'Name unavailable')}</dd></div><div><dt>Character name</dt><dd>${escapeHTML(player.characterName?.trim() ? player.characterName : 'Character name unavailable')}</dd></div></dl></li>`).join('')}</ul>`;
+        content = `<ul class="player-roster">${players.map((player) => `<li><dl><div><dt>Name</dt><dd>${playerField(player?.name, 'Name unavailable')}</dd></div><div><dt>Character name</dt><dd>${playerField(player?.characterName, 'Character name unavailable')}</dd></div></dl></li>`).join('')}</ul>`;
       } else {
         content = `<p class="no-results">${reading.value === 0 ? 'No players are connected.' : `The server reports ${escapeHTML(number(reading.value))} connected players, but the roster returned no entries.`}</p>`;
       }

@@ -422,6 +422,10 @@ test('connected players show labeled escaped fields, preserve duplicates, and di
   }
   state.telemetry = rosterResponse('other');
   assert.doesNotMatch(telemetry(), /Alice|Mage|<dt>Name<\/dt>/);
+  state.telemetry = rosterResponse('a', [null, {name:42, characterName:{}}], 2);
+  html = telemetry();
+  assert.match(html, /Name unavailable/);
+  assert.match(html, /Character name unavailable/);
 });
 
 function refreshFixture(admin = false) {

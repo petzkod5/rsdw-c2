@@ -203,6 +203,7 @@ func TestConnectedPlayerRosterCollection(t *testing.T) {
 		players       []ConnectedPlayer
 	}{
 		{"populated", `{"count":3,"players":[{"name":"Alice","characterName":"Mage","playerId":"private","token":"secret"},{"name":"Bob","characterName":"Warrior"},{"name":"Alice","characterName":"Mage"}]}`, number(3), []ConnectedPlayer{{"Alice", "Mage"}, {"Bob", "Warrior"}, {"Alice", "Mage"}}},
+		{"trimmed", `{"count":1,"players":[{"name":" Alice ","characterName":" Mage "}]}`, number(1), []ConnectedPlayer{{"Alice", "Mage"}}},
 		{"empty", `{"count":0,"players":[]}`, number(0), []ConnectedPlayer{}},
 		{"mismatch", `{"count":4,"players":[]}`, number(4), []ConnectedPlayer{}},
 		{"partial", `{"count":4,"players":[{"name":"Alice"},{"characterName":"Mage"},{},{"name":" \t","characterName":"\n"}]}`, number(4), []ConnectedPlayer{{"Alice", ""}, {"", "Mage"}, {}, {}}},

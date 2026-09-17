@@ -508,12 +508,8 @@ func decodePlayerRoster(data json.RawMessage) PlayerRoster {
 		if player == nil {
 			return PlayerRoster{}
 		}
-		if strings.TrimSpace(player.Name) == "" {
-			player.Name = ""
-		}
-		if strings.TrimSpace(player.CharacterName) == "" {
-			player.CharacterName = ""
-		}
+		player.Name = strings.TrimSpace(player.Name)
+		player.CharacterName = strings.TrimSpace(player.CharacterName)
 		roster.Players[i] = *player
 	}
 	return roster
