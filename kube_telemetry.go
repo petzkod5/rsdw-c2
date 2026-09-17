@@ -278,7 +278,7 @@ func (k *kubeOrchestrator) collectObservation(ctx context.Context, server Server
 	sourceCtx, cancelSources := context.WithDeadline(ctx, deadline.Add(-telemetryCommandTimeout))
 	defer cancelSources()
 	k.collectResources(sourceCtx, target, result.metrics)
-	k.collectGame(sourceCtx, target, result.metrics)
+	result.playerRoster = k.collectGame(sourceCtx, target, result.metrics)
 	k.collectDisk(sourceCtx, target, result.metrics)
 	if target.pod.Spec.HostNetwork {
 		failReadings(result.metrics, networkKeys, "unsupported", "Host-network counters cannot be attributed to this Pod", nil)
@@ -309,6 +309,7 @@ func (k *kubeOrchestrator) collectObservation(ctx context.Context, server Server
 			failReadings(result.metrics, []string{key}, "unavailable", reason, nil)
 		}
 		result.network = nil
+		result.playerRoster = PlayerRoster{}
 		result.image = ""
 		result.status = StatusUnknown
 		return result
@@ -441,7 +442,8 @@ func (k *kubeOrchestrator) collectResources(ctx context.Context, target podTarge
 	}
 }
 
-func (k *kubeOrchestrator) collectGame(ctx context.Context, target podTarget, metrics map[string]MetricReading) {
+func (k *kubeOrchestrator) collectGame(ctx context.Context, target podTarget, metrics map[string]MetricReading) PlayerRoster {
+	var roster PlayerRoster
 	for _, endpoint := range []string{"health", "players"} {
 		keys := []string{"engineReady", "uptimeSeconds"}
 		if endpoint == "players" {
@@ -480,15 +482,41 @@ func (k *kubeOrchestrator) collectGame(ctx context.Context, target podTarget, me
 			}
 		} else {
 			var payload struct {
-				Count *float64 `json:"count"`
+				Count   *float64        `json:"count"`
+				Players json.RawMessage `json:"players"`
 			}
 			if json.Unmarshal(data, &payload) != nil || payload.Count == nil || math.Trunc(*payload.Count) != *payload.Count || *payload.Count > float64(math.MaxInt32) {
 				failReadings(metrics, keys, "error", "Invalid or missing player count", &at)
 			} else {
 				setReading(metrics, "players", *payload.Count, at)
+				if metrics["players"].Status == "available" {
+					roster = decodePlayerRoster(payload.Players)
+				}
 			}
 		}
 	}
+	return roster
+}
+
+func decodePlayerRoster(data json.RawMessage) PlayerRoster {
+	var players []*ConnectedPlayer
+	if json.Unmarshal(data, &players) != nil || players == nil {
+		return PlayerRoster{}
+	}
+	roster := PlayerRoster{Players: make([]ConnectedPlayer, len(players))}
+	for i, player := range players {
+		if player == nil {
+			return PlayerRoster{}
+		}
+		if strings.TrimSpace(player.Name) == "" {
+			player.Name = ""
+		}
+		if strings.TrimSpace(player.CharacterName) == "" {
+			player.CharacterName = ""
+		}
+		roster.Players[i] = *player
+	}
+	return roster
 }
 
 func (k *kubeOrchestrator) collectTicks(ctx context.Context, target podTarget, metrics map[string]MetricReading) {

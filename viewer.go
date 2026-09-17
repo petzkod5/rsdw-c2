@@ -75,6 +75,7 @@ func viewerMetrics(metrics map[string]MetricReading) map[string]ViewerMetric {
 
 type ViewerTelemetry struct {
 	Server            ViewerServer            `json:"server"`
+	PlayerRoster      PlayerRoster            `json:"playerRoster"`
 	Metrics           map[string]ViewerMetric `json:"metrics"`
 	MetricsAvailable  bool                    `json:"metricsAvailable"`
 	Samples           []MetricSample          `json:"samples"`
@@ -84,6 +85,12 @@ type ViewerTelemetry struct {
 
 func viewerTelemetry(telemetry Telemetry) ViewerTelemetry {
 	result := ViewerTelemetry{Server: viewerServer(telemetry.Server), Metrics: viewerMetrics(telemetry.Metrics), MetricsAvailable: telemetry.MetricsAvailable, Samples: []MetricSample{}, MetricDefinitions: []MetricDefinition{}}
+	if players := result.Metrics["players"]; players.Status == "available" && players.Value != nil && telemetry.PlayerRoster.Players != nil {
+		result.PlayerRoster.Players = make([]ConnectedPlayer, len(telemetry.PlayerRoster.Players))
+		for i, player := range telemetry.PlayerRoster.Players {
+			result.PlayerRoster.Players[i] = ConnectedPlayer{Name: player.Name, CharacterName: player.CharacterName}
+		}
+	}
 	result.HealthChecks = []ViewerHealthCheck{}
 	if ready := result.Metrics["engineReady"]; ready.ObservedAt != nil {
 		status := ready.Status

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"reflect"
 	"runtime"
 	"strings"
 	"sync"
@@ -86,7 +87,7 @@ func TestIdentityLookupFailureReason(t *testing.T) {
 	if got.metrics["players"].Reason != "Pod identity verification failed: fixture lookup denied" {
 		t.Fatalf("incorrect lookup failure reason: %q", got.metrics["players"].Reason)
 	}
-	if got.image != "" || got.network != nil || got.status != StatusUnknown {
+	if got.image != "" || got.network != nil || got.playerRoster.Players != nil || got.status != StatusUnknown {
 		t.Fatalf("unverified identity retained: %+v", got)
 	}
 }
@@ -195,6 +196,66 @@ func TestCollectRealSourceContract(t *testing.T) {
 	}
 }
 
+func TestConnectedPlayerRosterCollection(t *testing.T) {
+	for _, tc := range []struct {
+		name, payload string
+		count         *float64
+		players       []ConnectedPlayer
+	}{
+		{"populated", `{"count":3,"players":[{"name":"Alice","characterName":"Mage","playerId":"private","token":"secret"},{"name":"Bob","characterName":"Warrior"},{"name":"Alice","characterName":"Mage"}]}`, number(3), []ConnectedPlayer{{"Alice", "Mage"}, {"Bob", "Warrior"}, {"Alice", "Mage"}}},
+		{"empty", `{"count":0,"players":[]}`, number(0), []ConnectedPlayer{}},
+		{"mismatch", `{"count":4,"players":[]}`, number(4), []ConnectedPlayer{}},
+		{"partial", `{"count":4,"players":[{"name":"Alice"},{"characterName":"Mage"},{},{"name":" \t","characterName":"\n"}]}`, number(4), []ConnectedPlayer{{"Alice", ""}, {"", "Mage"}, {}, {}}},
+		{"count only", `{"count":4}`, number(4), nil},
+		{"null", `{"count":4,"players":null}`, number(4), nil},
+		{"object", `{"count":4,"players":{}}`, number(4), nil},
+		{"string", `{"count":4,"players":"broken"}`, number(4), nil},
+		{"bad entry", `{"count":4,"players":[{"name":"Alice"},7]}`, number(4), nil},
+		{"null entry", `{"count":4,"players":[null]}`, number(4), nil},
+		{"bad field", `{"count":4,"players":[{"name":42}]}`, number(4), nil},
+		{"missing count", `{"players":[{"name":"Alice"}]}`, nil, nil},
+		{"bad count", `{"count":"4","players":[{"name":"Alice"}]}`, nil, nil},
+		{"negative count", `{"count":-1,"players":[{"name":"Alice"}]}`, nil, nil},
+		{"fractional count", `{"count":1.5,"players":[]}`, nil, nil},
+		{"oversized count", `{"count":2147483648,"players":[]}`, nil, nil},
+		{"invalid JSON", `{"count":4,"players":[`, nil, nil},
+		{"invalid top level", `[]`, nil, nil},
+		{"failed request", "", nil, nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			k, runner, server := collectorFixture()
+			runner.override = func(call string) ([]byte, error, bool) {
+				if strings.Contains(call, "/api/players") {
+					if tc.payload == "" {
+						return nil, errors.New("upstream failure"), true
+					}
+					return []byte(tc.payload), nil, true
+				}
+				return nil, nil, false
+			}
+			got := k.collectObservation(context.Background(), server, nil)
+			status := "available"
+			if tc.count == nil {
+				status = "error"
+			}
+			expectMetric(t, got.metrics, "players", status, tc.count)
+			expectMetric(t, got.metrics, "engineReady", "available", number(1))
+			if !reflect.DeepEqual(got.playerRoster.Players, tc.players) {
+				t.Fatalf("roster = %#v, want %#v", got.playerRoster.Players, tc.players)
+			}
+			calls := 0
+			for _, call := range runner.calls {
+				if strings.Contains(call, "/api/players") {
+					calls++
+				}
+			}
+			if calls != 1 {
+				t.Fatalf("players fetched %d times", calls)
+			}
+		})
+	}
+}
+
 func TestReadinessStatus(t *testing.T) {
 	for _, tc := range []struct {
 		name, before, after, health string
@@ -300,6 +361,9 @@ func TestOwnershipAndReplacement(t *testing.T) {
 			}
 			if result.network != nil {
 				t.Fatal("unsafe baseline retained")
+			}
+			if result.playerRoster.Players != nil {
+				t.Fatal("roster retained for unsafe target")
 			}
 		})
 	}

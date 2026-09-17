@@ -474,3 +474,103 @@ func TestTickCacheUsesExistingFreshnessWithoutRenewingSource(t *testing.T) {
 		}
 	}
 }
+
+func TestPlayerRosterProjection(t *testing.T) {
+	now := time.Now().UTC()
+	players := []ConnectedPlayer{{Name: "Alice", CharacterName: "Mage"}}
+	for _, tc := range []struct {
+		name, status string
+		at           *time.Time
+		value        *float64
+		roster       []ConnectedPlayer
+		want         []ConnectedPlayer
+	}{
+		{"populated", "available", &now, number(1), players, players},
+		{"empty", "available", &now, number(0), []ConnectedPlayer{}, []ConnectedPlayer{}},
+		{"mismatch", "available", &now, number(4), []ConnectedPlayer{}, []ConnectedPlayer{}},
+		{"missing", "available", &now, number(4), nil, nil},
+		{"stale status", "stale", &now, number(1), players, nil},
+		{"failed", "error", &now, nil, players, nil},
+		{"unavailable", "unavailable", &now, nil, players, nil},
+		{"no count", "available", &now, nil, players, nil},
+		{"no timestamp", "available", nil, number(1), players, nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			app, _, server := fixtureApp(t)
+			metrics := emptyMetrics()
+			metrics["players"] = MetricReading{Value: tc.value, Status: tc.status, ObservedAt: tc.at}
+			app.observations().history[server.ID] = []observation{{at: now, metrics: metrics, playerRoster: PlayerRoster{Players: tc.roster}}}
+			got := app.telemetryFor(server, "1h")
+			view := viewerTelemetry(got)
+			if !reflect.DeepEqual(got.PlayerRoster.Players, tc.want) || !reflect.DeepEqual(view.PlayerRoster.Players, tc.want) {
+				t.Fatalf("admin=%#v viewer=%#v want=%#v", got.PlayerRoster.Players, view.PlayerRoster.Players, tc.want)
+			}
+			for _, output := range []any{got, view} {
+				data, err := json.Marshal(output)
+				if err != nil {
+					t.Fatal(err)
+				}
+				var body map[string]json.RawMessage
+				if err := json.Unmarshal(data, &body); err != nil {
+					t.Fatal(err)
+				}
+				want, _ := json.Marshal(PlayerRoster{Players: tc.want})
+				if string(body["playerRoster"]) != string(want) {
+					t.Fatalf("wire roster=%s want=%s", body["playerRoster"], want)
+				}
+			}
+			if len(view.PlayerRoster.Players) > 0 {
+				view.PlayerRoster.Players[0].Name = "Changed"
+				if got.PlayerRoster.Players[0].Name != "Alice" {
+					t.Fatal("viewer roster aliases retained roster")
+				}
+			}
+		})
+	}
+}
+
+func TestPlayerRosterExpiresAndNeverFallsBack(t *testing.T) {
+	app, runner, server := fixtureApp(t)
+	runner.override = func(call string) ([]byte, error, bool) {
+		if strings.Contains(call, "/api/players") {
+			return []byte(`{"count":1,"players":[{"name":"Alice","characterName":"Mage","playerId":"PRIVATE","token":"SECRET"}]}`), nil, true
+		}
+		return nil, nil, false
+	}
+	app.collectTelemetry(context.Background())
+	first := app.telemetryFor(server, "1h")
+	view, err := json.Marshal(viewerTelemetry(first))
+	if err != nil || !strings.Contains(string(view), `"name":"Alice","characterName":"Mage"`) || strings.Contains(string(view), "PRIVATE") || strings.Contains(string(view), "SECRET") {
+		t.Fatalf("unsafe or missing viewer roster: %s, %v", view, err)
+	}
+	if len(first.PlayerRoster.Players) != 1 {
+		t.Fatal("missing current roster")
+	}
+	other := app.telemetryFor(Server{ID: "other"}, "1h")
+	if other.PlayerRoster.Players != nil {
+		t.Fatal("roster crossed server boundary")
+	}
+	old := time.Now().Add(-time.Minute)
+	reading := app.observations().history[server.ID][0].metrics["players"]
+	reading.ObservedAt = &old
+	app.observations().history[server.ID][0].metrics["players"] = reading
+	stale := app.telemetryFor(server, "1h")
+	if stale.Metrics["players"].Status != "stale" || stale.PlayerRoster.Players != nil || viewerTelemetry(stale).PlayerRoster.Players != nil {
+		t.Fatal("stale observation exposed names")
+	}
+	runner.override = func(call string) ([]byte, error, bool) {
+		if strings.Contains(call, "/api/players") {
+			return nil, fmt.Errorf("PRIVATE upstream failure"), true
+		}
+		return nil, nil, false
+	}
+	app.collectTelemetry(context.Background())
+	failed := app.telemetryFor(server, "1h")
+	if failed.PlayerRoster.Players != nil || failed.Metrics["players"].Status != "error" || len(failed.Samples) != 2 {
+		t.Fatal("failed collection reused a previous roster or lost history")
+	}
+	view, err = json.Marshal(viewerTelemetry(failed))
+	if err != nil || strings.Contains(string(view), "Alice") || strings.Contains(string(view), "PRIVATE") {
+		t.Fatalf("viewer exposed names or failure details: %s, %v", view, err)
+	}
+}

@@ -191,6 +191,7 @@ type UpdateServerRequest struct {
 
 type Telemetry struct {
 	Server            Server                   `json:"server"`
+	PlayerRoster      PlayerRoster             `json:"playerRoster"`
 	Metrics           map[string]MetricReading `json:"metrics"`
 	MetricsAvailable  bool                     `json:"metricsAvailable"`
 	Samples           []MetricSample           `json:"samples"`

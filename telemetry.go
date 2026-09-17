@@ -29,6 +29,15 @@ type MetricReading struct {
 	Reason     string     `json:"reason"`
 }
 
+type ConnectedPlayer struct {
+	Name          string `json:"name"`
+	CharacterName string `json:"characterName"`
+}
+
+type PlayerRoster struct {
+	Players []ConnectedPlayer `json:"players"`
+}
+
 var metricCatalog = []struct{ key, unit, source, description string }{
 	{"players", "players", "game API /api/players", "Connected players reported by the authenticated game API."},
 	{"uptimeSeconds", "seconds", "game API /api/health", "Game API process uptime."},
@@ -97,6 +106,7 @@ type observation struct {
 	health           string
 	at               time.Time
 	metrics          map[string]MetricReading
+	playerRoster     PlayerRoster
 	status           Status
 	image            string
 	network          *networkCounters
@@ -288,6 +298,9 @@ func (a *App) telemetryFor(server Server, requestedRange string) Telemetry {
 	}
 	server = joinObservation(server, current, now)
 	result := Telemetry{Server: server, Metrics: server.Metrics, MetricsAvailable: server.MetricsAvailable, Samples: []MetricSample{}, HealthChecks: []HealthCheck{}, MetricDefinitions: []MetricDefinition{}}
+	if players := result.Metrics["players"]; players.Status == "available" && players.Value != nil {
+		result.PlayerRoster = current.playerRoster
+	}
 	for _, item := range metricCatalog {
 		result.MetricDefinitions = append(result.MetricDefinitions, MetricDefinition{Metric: item.key, Description: item.description})
 	}
