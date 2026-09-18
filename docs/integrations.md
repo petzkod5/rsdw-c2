@@ -2,7 +2,9 @@
 
 The Integrations page is available to admins. OIDC viewers cannot read or change integrations, deliveries, or Secret references. OIDC mutations require the session CSRF token and the configured Origin. Token-mode requests require the admin bearer token. Session changes clear integration lists, delivery history, and open configuration forms.
 
-![Integrations hub with a Discord card, then the Discord alerts page.](screenshots/integrations.png)
+![Integrations hub with a Discord card marked Connected.](screenshots/integrations.png)
+
+![Discord alerts page with a configured bot and recent messages.](screenshots/integrations-discord.png)
 
 ## Configuration
 
