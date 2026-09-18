@@ -67,7 +67,6 @@ function parseLocationHash(hash) {
   const pageKey = slash === -1 ? raw : raw.slice(0, slash);
   const view = slash === -1 ? '' : raw.slice(slash + 1);
   if (pageKey === 'integrations') {
-    // Unknown provider paths stay on the hub instead of falling through to dashboard.
     return {page:'integrations', integrationView: view === 'discord' ? 'discord' : 'hub'};
   }
   return {page: pages[pageKey] ? pageKey : 'dashboard', integrationView:'hub'};
@@ -85,10 +84,14 @@ function deliveryTime(delivery) {
   const value = Date.parse(delivery?.updatedAt || delivery?.event?.timestamp || '');
   return Number.isFinite(value) ? value : 0;
 }
-function latestDeliveryFor(integrationId, deliveries) {
+function deliveryWasCancelled(delivery) {
+  const result = String(delivery?.result || '');
+  return result.startsWith('Cancelled by ') || result === 'Integration no longer enables this delivery';
+}
+function latestAttemptedDeliveryFor(integrationId, deliveries) {
   let latest = null;
   for (const delivery of deliveries || []) {
-    if (delivery.integrationId !== integrationId) continue;
+    if (delivery.integrationId !== integrationId || deliveryWasCancelled(delivery)) continue;
     if (!latest || deliveryTime(delivery) > deliveryTime(latest)) latest = delivery;
   }
   return latest;
@@ -98,8 +101,7 @@ function discordConnectionStatus(integrations, deliveries) {
   if (!list.length) return 'not_connected';
   const alerting = list.filter(alertingIntegration);
   if (!alerting.length) return 'disconnected';
-  // Non-failed latest statuses, including no deliveries yet, keep an alerting bot connected.
-  return alerting.every((item) => latestDeliveryFor(item.id, deliveries)?.status === 'failed') ? 'disconnected' : 'connected';
+  return alerting.every((item) => latestAttemptedDeliveryFor(item.id, deliveries)?.status === 'failed') ? 'disconnected' : 'connected';
 }
 const staleRequest = () => new DOMException('Session changed', 'AbortError');
 const monotonicNow = () => typeof performance !== 'undefined' && typeof performance.now === 'function' ? performance.now() : Date.now();

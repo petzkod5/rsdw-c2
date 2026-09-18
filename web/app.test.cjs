@@ -212,6 +212,15 @@ assert.equal(context.ui.discordConnectionStatus([{id:'bot', enabled:true, server
 assert.equal(context.ui.discordConnectionStatus([{id:'bot', enabled:true, serverIds:['world-01'], rules:{restart_completed:true}}], []), 'connected');
 assert.equal(context.ui.discordConnectionStatus([{id:'bot', enabled:true, serverIds:['world-01'], rules:{restart_completed:true}}], [{integrationId:'bot', status:'sent', updatedAt:'2026-09-18T00:00:00Z'}]), 'connected');
 assert.equal(context.ui.discordConnectionStatus([{id:'bot', enabled:true, serverIds:['world-01'], rules:{restart_completed:true}}], [{integrationId:'bot', status:'failed', updatedAt:'2026-09-18T00:00:00Z'}]), 'disconnected');
+assert.equal(context.ui.discordConnectionStatus([{id:'bot', enabled:true, serverIds:['world-01'], rules:{restart_completed:true}}], [{integrationId:'bot', status:'failed', result:'Cancelled by integration configuration change', updatedAt:'2026-09-18T00:00:02Z'}]), 'connected');
+assert.equal(context.ui.discordConnectionStatus([{id:'bot', enabled:true, serverIds:['world-01'], rules:{restart_completed:true}}], [
+  {integrationId:'bot', status:'failed', result:'Cancelled by integration configuration change', updatedAt:'2026-09-18T00:00:02Z'},
+  {integrationId:'bot', status:'sent', updatedAt:'2026-09-18T00:00:00Z'},
+]), 'connected');
+assert.equal(context.ui.discordConnectionStatus([{id:'bot', enabled:true, serverIds:['world-01'], rules:{restart_completed:true}}], [
+  {integrationId:'bot', status:'failed', result:'Integration no longer enables this delivery', updatedAt:'2026-09-18T00:00:02Z'},
+  {integrationId:'bot', status:'sent', updatedAt:'2026-09-18T00:00:00Z'},
+]), 'connected');
 assert.equal(context.ui.discordConnectionStatus(
   [{id:'a', enabled:true, serverIds:['world-01'], rules:{restart_completed:true}}, {id:'b', enabled:true, serverIds:['world-01'], rules:{restart_completed:true}}],
   [{integrationId:'a', status:'failed', updatedAt:'2026-09-18T00:00:01Z'}, {integrationId:'b', status:'sent', updatedAt:'2026-09-18T00:00:00Z'}]
