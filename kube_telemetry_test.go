@@ -8,6 +8,7 @@ import (
 	"math"
 	"reflect"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -194,6 +195,11 @@ func TestCollectRealSourceContract(t *testing.T) {
 	if !strings.Contains(strings.Join(runner.calls, "\n"), `-H "Authorization: Bearer $(cat /run/rsdwapi/token)"`) {
 		t.Fatal("game API not authenticated")
 	}
+	for _, call := range runner.calls {
+		if strings.Contains(call, "/api/players") && !strings.Contains(call, "--max-filesize") {
+			t.Fatalf("player API response is not bounded: %s", call)
+		}
+	}
 }
 
 func TestConnectedPlayerRosterCollection(t *testing.T) {
@@ -201,27 +207,28 @@ func TestConnectedPlayerRosterCollection(t *testing.T) {
 		name, payload string
 		count         *float64
 		players       []ConnectedPlayer
+		status        RosterStatus
 	}{
-		{"populated", `{"count":3,"players":[{"name":"Alice","characterName":"Mage","playerId":"private","token":"secret"},{"name":"Bob","characterName":"Warrior"},{"name":"Alice","characterName":"Mage"}]}`, number(3), []ConnectedPlayer{{"Alice", "Mage"}, {"Bob", "Warrior"}, {"Alice", "Mage"}}},
-		{"trimmed", `{"count":1,"players":[{"name":" Alice ","characterName":" Mage "}]}`, number(1), []ConnectedPlayer{{"Alice", "Mage"}}},
-		{"empty", `{"count":0,"players":[]}`, number(0), []ConnectedPlayer{}},
-		{"mismatch", `{"count":4,"players":[]}`, number(4), []ConnectedPlayer{}},
-		{"partial", `{"count":4,"players":[{"name":"Alice"},{"characterName":"Mage"},{},{"name":" \t","characterName":"\n"}]}`, number(4), []ConnectedPlayer{{"Alice", ""}, {"", "Mage"}, {}, {}}},
-		{"count only", `{"count":4}`, number(4), nil},
-		{"null", `{"count":4,"players":null}`, number(4), nil},
-		{"object", `{"count":4,"players":{}}`, number(4), nil},
-		{"string", `{"count":4,"players":"broken"}`, number(4), nil},
-		{"bad entry", `{"count":4,"players":[{"name":"Alice"},7]}`, number(4), nil},
-		{"null entry", `{"count":4,"players":[null]}`, number(4), nil},
-		{"bad field", `{"count":4,"players":[{"name":42}]}`, number(4), nil},
-		{"missing count", `{"players":[{"name":"Alice"}]}`, nil, nil},
-		{"bad count", `{"count":"4","players":[{"name":"Alice"}]}`, nil, nil},
-		{"negative count", `{"count":-1,"players":[{"name":"Alice"}]}`, nil, nil},
-		{"fractional count", `{"count":1.5,"players":[]}`, nil, nil},
-		{"oversized count", `{"count":2147483648,"players":[]}`, nil, nil},
-		{"invalid JSON", `{"count":4,"players":[`, nil, nil},
-		{"invalid top level", `[]`, nil, nil},
-		{"failed request", "", nil, nil},
+		{"populated", `{"count":3,"players":[{"name":"Alice","characterName":"Mage","playerId":"private","token":"secret"},{"name":"Bob","characterName":"Warrior"},{"name":"Alice","characterName":"Mage"}]}`, number(3), []ConnectedPlayer{{"Alice", "Mage"}, {"Bob", "Warrior"}, {"Alice", "Mage"}}, RosterAvailable},
+		{"trimmed", `{"count":1,"players":[{"name":" Alice ","characterName":" Mage "}]}`, number(1), []ConnectedPlayer{{"Alice", "Mage"}}, RosterAvailable},
+		{"empty", `{"count":0,"players":[]}`, number(0), []ConnectedPlayer{}, RosterAvailable},
+		{"mismatch", `{"count":4,"players":[]}`, number(4), []ConnectedPlayer{}, RosterAvailable},
+		{"partial", `{"count":4,"players":[{"name":"Alice"},{"characterName":"Mage"},{},{"name":" \t","characterName":"\n"}]}`, number(4), []ConnectedPlayer{{"Alice", ""}, {"", "Mage"}, {}, {}}, RosterAvailable},
+		{"count only", `{"count":4}`, number(4), nil, RosterUnavailable},
+		{"null", `{"count":4,"players":null}`, number(4), nil, RosterUnavailable},
+		{"object", `{"count":4,"players":{}}`, number(4), nil, RosterError},
+		{"string", `{"count":4,"players":"broken"}`, number(4), nil, RosterError},
+		{"bad entry", `{"count":4,"players":[{"name":"Alice"},7]}`, number(4), nil, RosterError},
+		{"null entry", `{"count":4,"players":[null]}`, number(4), nil, RosterError},
+		{"bad field", `{"count":4,"players":[{"name":42}]}`, number(4), nil, RosterError},
+		{"missing count", `{"players":[{"name":"Alice"}]}`, nil, nil, RosterUnavailable},
+		{"bad count", `{"count":"4","players":[{"name":"Alice"}]}`, nil, nil, RosterUnavailable},
+		{"negative count", `{"count":-1,"players":[{"name":"Alice"}]}`, nil, nil, RosterUnavailable},
+		{"fractional count", `{"count":1.5,"players":[]}`, nil, nil, RosterUnavailable},
+		{"oversized count", `{"count":2147483648,"players":[]}`, nil, nil, RosterUnavailable},
+		{"invalid JSON", `{"count":4,"players":[`, nil, nil, RosterUnavailable},
+		{"invalid top level", `[]`, nil, nil, RosterUnavailable},
+		{"failed request", "", nil, nil, RosterUnavailable},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			k, runner, server := collectorFixture()
@@ -244,6 +251,9 @@ func TestConnectedPlayerRosterCollection(t *testing.T) {
 			if !reflect.DeepEqual(got.playerRoster.Players, tc.players) {
 				t.Fatalf("roster = %#v, want %#v", got.playerRoster.Players, tc.players)
 			}
+			if got.playerRoster.Status != tc.status {
+				t.Fatalf("roster status = %q, want %q (%s)", got.playerRoster.Status, tc.status, tc.name)
+			}
 			calls := 0
 			for _, call := range runner.calls {
 				if strings.Contains(call, "/api/players") {
@@ -254,6 +264,20 @@ func TestConnectedPlayerRosterCollection(t *testing.T) {
 				t.Fatalf("players fetched %d times", calls)
 			}
 		})
+	}
+}
+
+func TestPlayerRosterBounds(t *testing.T) {
+	tooMany := make([]string, maxPlayerRosterEntries+1)
+	for i := range tooMany {
+		tooMany[i] = `{"name":"Player"}`
+	}
+	if roster := decodePlayerRoster([]byte("[" + strings.Join(tooMany, ",") + "]")); roster.Status != RosterError || roster.Players != nil {
+		t.Fatalf("too many players = %+v", roster)
+	}
+	longName := `{"name":` + strconv.Quote(strings.Repeat("x", maxPlayerFieldBytes+1)) + `}`
+	if roster := decodePlayerRoster([]byte("[" + longName + "]")); roster.Status != RosterError || roster.Players != nil {
+		t.Fatalf("overlong name = %+v", roster)
 	}
 }
 

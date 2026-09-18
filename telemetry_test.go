@@ -505,6 +505,16 @@ func TestPlayerRosterProjection(t *testing.T) {
 			if !reflect.DeepEqual(got.PlayerRoster.Players, tc.want) || !reflect.DeepEqual(view.PlayerRoster.Players, tc.want) {
 				t.Fatalf("admin=%#v viewer=%#v want=%#v", got.PlayerRoster.Players, view.PlayerRoster.Players, tc.want)
 			}
+			wantStatus := RosterUnavailable
+			if tc.want != nil && tc.status == "available" && tc.value != nil && tc.at != nil {
+				wantStatus = RosterAvailable
+				if got.PlayerRoster.FreshForMs <= 0 || view.PlayerRoster.FreshForMs <= 0 {
+					t.Fatalf("fresh roster lifetime missing: admin=%+v viewer=%+v", got.PlayerRoster, view.PlayerRoster)
+				}
+			}
+			if got.PlayerRoster.Status != wantStatus || view.PlayerRoster.Status != wantStatus {
+				t.Fatalf("admin status=%q viewer status=%q want=%q", got.PlayerRoster.Status, view.PlayerRoster.Status, wantStatus)
+			}
 			for _, output := range []any{got, view} {
 				data, err := json.Marshal(output)
 				if err != nil {
@@ -514,9 +524,12 @@ func TestPlayerRosterProjection(t *testing.T) {
 				if err := json.Unmarshal(data, &body); err != nil {
 					t.Fatal(err)
 				}
-				want, _ := json.Marshal(PlayerRoster{Players: tc.want})
-				if string(body["playerRoster"]) != string(want) {
-					t.Fatalf("wire roster=%s want=%s", body["playerRoster"], want)
+				var wire PlayerRoster
+				if err := json.Unmarshal(body["playerRoster"], &wire); err != nil {
+					t.Fatal(err)
+				}
+				if wire.Status != wantStatus || !reflect.DeepEqual(wire.Players, tc.want) {
+					t.Fatalf("wire roster=%s status=%q players=%#v", body["playerRoster"], wire.Status, wire.Players)
 				}
 			}
 			if len(view.PlayerRoster.Players) > 0 {
@@ -526,6 +539,24 @@ func TestPlayerRosterProjection(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestHistoricalObservationsDoNotRetainPlayerRosters(t *testing.T) {
+	app, _, server := fixtureApp(t)
+	now := time.Now().UTC()
+	players := []ConnectedPlayer{{Name: "Alice", CharacterName: "Mage"}}
+	metrics := emptyMetrics()
+	metrics["players"] = MetricReading{Value: number(1), Status: "available", ObservedAt: &now}
+	app.observations().history[server.ID] = []observation{{at: now, metrics: metrics, playerRoster: PlayerRoster{Status: RosterAvailable, Players: players}}}
+
+	app.markTelemetryPending(server)
+	history := app.observations().history[server.ID]
+	if len(history) != 2 {
+		t.Fatalf("history length = %d, want 2", len(history))
+	}
+	if history[0].playerRoster.Players != nil || history[0].playerRoster.Status != "" {
+		t.Fatalf("historical roster retained: %+v", history[0].playerRoster)
 	}
 }
 

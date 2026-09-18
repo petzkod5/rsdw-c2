@@ -3,7 +3,7 @@ const path = require('node:path');
 const {chromium} = require('playwright');
 
 async function run() {
-  const browser = await chromium.launch({headless:true});
+  const browser = await chromium.launch({headless:true, executablePath:process.env.RSDW_TEST_CHROMIUM});
   try {
     const page = await browser.newPage();
     const errors = [];
@@ -23,7 +23,7 @@ async function run() {
       let body;
       if (url.pathname === '/api/auth') body = {mode:'oidc',authenticated:true,subject:'viewer',role:'viewer',csrfToken:'session',capabilities:{dashboard:true,telemetry:true}};
       else if (url.pathname === '/api/bootstrap') body = {servers:[server],cluster:'Test'};
-      else if (url.pathname === '/api/servers/world/telemetry') body = {server,metrics:{players:{value:3,status:'available',observedAt:new Date().toISOString()}},playerRoster:{players},samples:[]};
+      else if (url.pathname === '/api/servers/world/telemetry') body = {server,metrics:{players:{value:3,status:'available',observedAt:new Date().toISOString()}},playerRoster:{status:'available',freshForMs:45000,players},samples:[]};
       else throw new Error(`Unexpected request ${url.pathname}`);
       await route.fulfill({json:body});
     });

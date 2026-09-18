@@ -35,7 +35,7 @@ const state = {
   page: 'dashboard', servers: [], events: [], users: [], serverId: '', fleetFilter: 'all',
   integrations: [], deliveries: [], alertRules: [], pendingRestarts: {}, integrationsDemo: false, modalIntegrationId: '',
   reboots: [], rebootHistory: [], rebootsAvailable: true, rebootsDemo: false, displayTimezone: '', authSubject: '', modalRebootId: '', previewSequence: 0,
-  query: '', category: '', range: '60s', telemetry: null, logs: '', logQuery: '',
+  query: '', category: '', range: '60s', telemetry: null, rosterObservation: '', rosterDeadline: 0, logs: '', logQuery: '',
   selectedEventId: '', paused: false, loaded: false, lastUpdated: null, refreshing: false,
   modalAction: '', modalServerId: '', modalUserId: '', modalBusy: false, modalInitialSettings: {}, request: null,
   authRequired: false, loginBusy: false, authMode: '', identity: '', csrfToken: '', role: 'denied', capabilities: {}, epoch: 0, logoutCSRF: '', signInFailed: false,
@@ -48,6 +48,29 @@ let refreshSequence = 0;
 let rosterExpiryTimer;
 const can = (capability) => state.capabilities[({users:'create', 'edit-settings':'maintenance', 'add-user':'create', 'edit-user':'create', 'delete-user':'create', 'add-integration':'integrations', 'edit-integration':'integrations', 'test-integration':'integrations', 'add-reboot':'reboots', 'edit-reboot':'reboots', 'delete-reboot':'reboots', 'preview-reboot':'reboots'})[capability] || capability] === true;
 const staleRequest = () => new DOMException('Session changed', 'AbortError');
+const monotonicNow = () => typeof performance !== 'undefined' && typeof performance.now === 'function' ? performance.now() : Date.now();
+const rosterObservationKey = (telemetry) => telemetry?.server?.id && telemetry?.metrics?.players?.observedAt ? `${telemetry.server.id}\n${telemetry.metrics.players.observedAt}` : '';
+
+function clearTelemetry() {
+  state.telemetry = null;
+  state.rosterObservation = '';
+  state.rosterDeadline = 0;
+}
+
+function acceptTelemetry(result, startedAt, receivedAt) {
+  const key = rosterObservationKey(result);
+  const metric = result?.metrics?.players;
+  const freshForMs = Number(result?.playerRoster?.freshForMs);
+  state.telemetry = result;
+  if (key && metric?.status === 'available' && result.playerRoster?.status === 'available' && Number.isFinite(freshForMs) && freshForMs >= 0 && freshForMs <= 45000) {
+    const deadline = receivedAt + Math.max(0, freshForMs - Math.max(0, receivedAt - startedAt));
+    state.rosterDeadline = state.rosterObservation === key && state.rosterDeadline > 0 ? Math.min(state.rosterDeadline, deadline) : deadline;
+    state.rosterObservation = key;
+  } else {
+    state.rosterObservation = '';
+    state.rosterDeadline = 0;
+  }
+}
 
 function number(value, suffix = '') {
   return value == null || value === '' || !Number.isFinite(Number(value)) ? '—' : `${Number(value).toLocaleString(undefined, Math.abs(Number(value)) < 1 ? {maximumSignificantDigits:3} : {maximumFractionDigits:1})}${suffix}`;
@@ -168,7 +191,7 @@ function clearProtectedState() {
   clearTimeout(searchTimer);
   clearTimeout(toastTimer);
   clearTimeout(rosterExpiryTimer);
-  Object.assign(state, {servers:[], events:[], users:[], telemetry:null, logs:'', query:'', category:'', logQuery:'', serverId:'', selectedEventId:'', loaded:false, lastUpdated:null, modalAction:'', modalServerId:'', modalUserId:'', modalBusy:false, modalRebootId:'', identity:'', authSubject:'', csrfToken:'', capabilities:{}, role:'denied', displayTimezone:'', previewSequence:0});
+  Object.assign(state, {servers:[], events:[], users:[], telemetry:null, rosterObservation:'', rosterDeadline:0, logs:'', query:'', category:'', logQuery:'', serverId:'', selectedEventId:'', loaded:false, lastUpdated:null, modalAction:'', modalServerId:'', modalUserId:'', modalBusy:false, modalInitialSettings:{}, modalRebootId:'', identity:'', authSubject:'', csrfToken:'', capabilities:{}, role:'denied', displayTimezone:'', previewSequence:0});
   Object.assign(state, {integrations:[], deliveries:[], alertRules:[], pendingRestarts:{}, integrationsDemo:false, modalIntegrationId:'', reboots:[], rebootHistory:[], rebootsAvailable:true, rebootsDemo:false});
   $('#modal').close();
   $('#modal-body').innerHTML = '';
@@ -388,15 +411,24 @@ function telemetry() {
 function connectedPlayers() {
   const data = state.telemetry;
   const reading = data?.metrics?.players;
-  const players = data?.playerRoster?.players;
-  const age = Date.now() - Date.parse(reading?.observedAt);
+  const roster = data?.playerRoster;
+  const players = roster?.players;
+  const key = rosterObservationKey(data);
+  const expired = state.rosterObservation === key && Number.isFinite(state.rosterDeadline) ? monotonicNow() >= state.rosterDeadline : (() => {
+    const age = Date.now() - Date.parse(reading?.observedAt);
+    return !Number.isFinite(age) || age > 45000 || age < -5000;
+  })();
   const playerField = (value, fallback) => escapeHTML(typeof value === 'string' && value.trim() ? value : fallback);
   let content = '<p class="no-results">Connected players are unavailable.</p>';
   if (data?.server?.id === selectedServer()?.id) {
-    if (reading?.status === 'stale' || (reading?.status === 'available' && (!Number.isFinite(age) || age > 45000 || age < -5000))) {
+    if (reading?.status === 'stale' || (reading?.status === 'available' && expired)) {
       content = '<p class="no-results">Connected players are stale. Refresh telemetry to see the current roster.</p>';
     } else if (reading?.status === 'error') {
       content = '<p class="no-results">Connected players are unavailable. The latest collection failed.</p>';
+    } else if (reading?.status === 'available' && roster?.status === 'error') {
+      content = '<p class="no-results">Connected players are unavailable. The game API returned an invalid roster.</p>';
+    } else if (reading?.status === 'available' && roster?.status === 'unavailable') {
+      content = '<p class="no-results">Connected player names are unavailable. The game API did not provide roster details.</p>';
     } else if (reading?.status === 'available' && Number.isFinite(reading.value) && Array.isArray(players)) {
       if (players.length) {
         content = `<ul class="player-roster">${players.map((player) => `<li><dl><div><dt>Name</dt><dd>${playerField(player?.name, 'Name unavailable')}</dd></div><div><dt>Character name</dt><dd>${playerField(player?.characterName, 'Character name unavailable')}</dd></div></dl></li>`).join('')}</ul>`;
@@ -617,7 +649,10 @@ function render() {
   }
   $('#content').setAttribute('aria-busy','false');
   clearTimeout(rosterExpiryTimer);
-  const rosterExpiresIn = Date.parse(state.telemetry?.metrics?.players?.observedAt) + 45001 - Date.now();
+  const key = rosterObservationKey(state.telemetry);
+  const rosterExpiresIn = state.rosterObservation === key && Number.isFinite(state.rosterDeadline)
+    ? state.rosterDeadline - monotonicNow()
+    : Date.parse(state.telemetry?.metrics?.players?.observedAt) + 45001 - Date.now();
   if (state.page === 'telemetry' && state.telemetry?.metrics?.players?.status === 'available' && rosterExpiresIn > 0) {
     rosterExpiryTimer = setTimeout(render, rosterExpiresIn);
   }
@@ -677,7 +712,7 @@ async function refresh() {
     state.deletions = bootstrap.deletions || {};
     state.loaded = true;
     if (state.serverId && !state.servers.some((server) => server.id === state.serverId)) state.serverId = '';
-    if (selectedId !== selectedServer()?.id) { state.telemetry = null; state.logs = ''; }
+    if (selectedId !== selectedServer()?.id) { clearTelemetry(); state.logs = ''; render(); }
     serverId = state.serverId;
     selectedId = selectedServer()?.id;
     $('#cluster-name').textContent = typeof bootstrap.cluster === 'string' ? bootstrap.cluster : bootstrap.cluster?.name || bootstrap.clusterName || 'Local cluster';
@@ -691,11 +726,13 @@ async function refresh() {
     if (can('integrations')) requests.push(api('/api/integrations',{signal:controller.signal}).then((result) => { if (epoch === state.epoch && !controller.signal.aborted) Object.assign(state,{integrations:result.integrations,deliveries:result.deliveries,alertRules:result.rules,pendingRestarts:result.pendingRestarts,integrationsDemo:result.demo}); }));
     if (can('reboots')) requests.push(api('/api/reboots',{signal:controller.signal}).then((result) => { if (epoch === state.epoch && !controller.signal.aborted) Object.assign(state,{reboots:result.schedules || [], rebootHistory:result.history || [], rebootsAvailable:result.available !== false, rebootsDemo:result.demo === true}); }));
     if (state.page === 'telemetry' && server) {
+      const telemetryStartedAt = monotonicNow();
       requests.push(api(`/api/servers/${encodeURIComponent(server.id)}/telemetry?range=${encodeURIComponent(range)}`,{signal:controller.signal}).then((result) => {
         if (!current()) return;
         if (result.server?.id !== selectedId) throw new Error('Telemetry returned a different server. Please refresh to try again.');
-        state.telemetry = result;
+        acceptTelemetry(result, telemetryStartedAt, monotonicNow());
         telemetryReceived = true;
+        render();
       }));
       if (can('logs')) requests.push(loadLogs(controller.signal));
     }
@@ -712,7 +749,7 @@ async function refresh() {
     if (state.authRequired) { lockedState(); return; }
     $('#error-banner').textContent = error.message;
     $('#error-banner').hidden = false;
-    if (!telemetryReceived) state.telemetry = null;
+    if (!telemetryReceived) clearTelemetry();
     if (state.loaded) render();
     else $('#content').innerHTML = '<section class="panel empty"><div class="empty-icon">'+icon('warning')+'</div><h2>Unable to connect</h2><p>Your server inventory could not be loaded. Check the connection and try again.</p><button data-action="retry" data-testid="retry-connection">Try again</button></section>';
     $('#content').setAttribute('aria-busy','false');
@@ -1047,7 +1084,7 @@ function navigate() {
   $('#navigation').innerHTML = Object.entries(pages).filter(([name]) => can(name)).map(([name,[label]])=>`<a href="#${name}" data-testid="nav-${name}" ${name===state.page?'aria-current="page"':''}>${icon(name)}${label}</a>`).join('');
   $('#page-title').textContent = pages[state.page][0];
   $('#page-description').textContent = pages[state.page][1];
-  state.telemetry = null;
+  clearTelemetry();
   state.logs = '';
   if (state.loaded) render();
   refresh();
@@ -1064,15 +1101,14 @@ function handleChange(event) {
     const user = state.users.find((item) => item.id === event.target.value);
     if (user) $('[data-testid="server-owner"]').value = user.playerId;
   }
-  if (event.target.id === 'telemetry-range') { state.range = event.target.value; state.telemetry = null; render(); refresh(); }
+  if (event.target.id === 'telemetry-range') { state.range = event.target.value; clearTelemetry(); render(); refresh(); }
   if (event.target.id === 'reboot-mode') { syncRebootModeFields(); updateDailyTimeControls(); }
   if (event.target.id === 'display-timezone') { saveDisplayTimezone(event.target.value); render(); }
-  if (event.target.id === 'server-filter') { state.serverId = event.target.value; state.telemetry = null; state.logs = ''; state.selectedEventId = ''; render(); refresh(); }
+  if (event.target.id === 'server-filter') { state.serverId = event.target.value; clearTelemetry(); state.logs = ''; state.selectedEventId = ''; render(); refresh(); }
 }
 $('#refresh').innerHTML = icon('refresh');
 $('#refresh').addEventListener('click',refresh);
 $('#pause').addEventListener('click',() => { state.paused = !state.paused; connection(); if (!state.paused) refresh(); });
-$('#server-filter').addEventListener('change',(event) => { state.serverId = event.target.value; state.telemetry = null; state.logs = ''; state.selectedEventId = ''; refresh(); });
 $('#modal-form').addEventListener('invalid', (event) => {
   const advanced = event.target.closest('details');
   if (advanced) advanced.open = true;

@@ -373,7 +373,7 @@ test('saved IDs refresh only for admins and late results cannot survive a sessio
 });
 
 function rosterResponse(id = 'a', players = [{name:'Alice', characterName:'Mage'}], count = 1) {
-  return {server:{id, name:`World ${id}`, maxPlayers:4}, playerRoster:{players}, metrics:{players:{value:count, status:'available', observedAt:new Date().toISOString()}}, samples:[]};
+  return {server:{id, name:`World ${id}`, maxPlayers:4}, playerRoster:{status:'available', freshForMs:45000, players}, metrics:{players:{value:count, status:'available', observedAt:new Date().toISOString()}}, samples:[]};
 }
 
 test('connected players show labeled escaped fields, preserve duplicates, and distinguish empty from unavailable', () => {
@@ -438,9 +438,11 @@ function refreshFixture(admin = false) {
   const timers = new Map();
   let timerID = 0;
   const clock = {now:Date.now()};
+  let monotonicNow = clock.now;
   const sandbox = vm.createContext({
     DOMException, AbortController, URLSearchParams, HTMLInputElement:class {},
     Date:class extends Date {static now(){return clock.now;}},
+    performance:{now:()=>monotonicNow},
     clearTimeout:(id)=>timers.delete(id), setTimeout:(fn,delay)=>{timers.set(++timerID,{fn,delay});return timerID;},
     document:{querySelector:element, querySelectorAll:()=>[], activeElement:null},
     sessionStorage:{getItem:()=>'', removeItem(){}},
@@ -466,7 +468,7 @@ function refreshFixture(admin = false) {
     reply('/api/bootstrap',{servers:[{id:'a',name:'World A',maxPlayers:4},{id:'b',name:'World B',maxPlayers:4}]});
     await flush();
   };
-  return {ui, element, requests, reply, flush, discover, clock, timers, sandbox};
+  return {ui, element, requests, reply, flush, discover, clock, timers, sandbox, advanceMonotonic:(delta)=>{monotonicNow += delta;}};
 }
 
 test('switching servers clears rendered names immediately and aborts before auth discovery', async () => {
@@ -489,6 +491,34 @@ test('switching servers clears rendered names immediately and aborts before auth
   await f.flush();
   assert.match(f.element('#content').innerHTML,/Bob/);
   assert.doesNotMatch(f.element('#content').innerHTML,/Alice|Mage/);
+});
+
+test('inventory reconciliation clears old names before replacement telemetry settles', async () => {
+  const f = refreshFixture();
+  f.ui.state.telemetry = rosterResponse();
+  f.ui.render();
+  const pending = f.ui.refresh();
+  f.reply('/api/auth',{mode:'oidc',authenticated:true,subject:'test',role:'viewer',csrfToken:'session',capabilities:{dashboard:true,telemetry:true}});
+  await f.flush();
+  f.reply('/api/bootstrap',{servers:[{id:'b',name:'World B',maxPlayers:4}],cluster:'test',mode:'demo'});
+  await f.flush();
+  assert.equal(f.ui.state.serverId,'');
+  assert.doesNotMatch(f.element('#content').innerHTML,/Alice|Mage/);
+  f.reply('/api/servers/b/telemetry?range=60s',rosterResponse('b',[{name:'Bob',characterName:'Warrior'}]));
+  await pending;
+  assert.match(f.element('#content').innerHTML,/Bob/);
+});
+
+test('accepted telemetry renders before an unrelated slow request settles', async () => {
+  const f = refreshFixture(true);
+  const pending = f.ui.refresh();
+  await f.discover();
+  f.reply('/api/servers/a/telemetry?range=60s',rosterResponse());
+  await f.flush();
+  assert.match(f.element('#content').innerHTML,/Alice|Mage/);
+  f.reply('/api/servers/a/logs?tail=100',{error:'Logs unavailable'},500);
+  await pending;
+  assert.match(f.element('#content').innerHTML,/Alice|Mage/);
 });
 
 test('A to B to A rejects the first A generation and late errors', async () => {
@@ -556,6 +586,43 @@ test('paused telemetry expires names locally without another request', () => {
   assert.match(f.element('#content').innerHTML,/Connected players are stale/);
   assert.doesNotMatch(f.element('#content').innerHTML,/Alice|Mage/);
   assert.equal(f.requests.length,0);
+});
+
+test('accepted roster freshness ignores browser wall-clock skew', async () => {
+  const f = refreshFixture();
+  const pending = f.ui.refresh();
+  await f.discover();
+  f.reply('/api/servers/a/telemetry?range=60s',rosterResponse());
+  await pending;
+  assert.match(f.element('#content').innerHTML,/Alice/);
+  f.clock.now += 10 * 60 * 1000;
+  f.advanceMonotonic(1000);
+  f.ui.render();
+  assert.match(f.element('#content').innerHTML,/Alice/);
+  f.advanceMonotonic(45000);
+  f.ui.render();
+  assert.match(f.element('#content').innerHTML,/Connected players are stale/);
+  assert.doesNotMatch(f.element('#content').innerHTML,/Alice|Mage/);
+});
+
+test('repeated telemetry for one observation cannot renew roster freshness', async () => {
+  const f = refreshFixture();
+  const response = rosterResponse();
+  const first = f.ui.refresh();
+  await f.discover();
+  f.reply('/api/servers/a/telemetry?range=60s',response);
+  await first;
+  const firstDeadline = f.ui.state.rosterDeadline;
+  f.advanceMonotonic(1000);
+  const second = f.ui.refresh();
+  await f.discover();
+  f.reply('/api/servers/a/telemetry?range=60s',response);
+  await second;
+  assert.equal(f.ui.state.rosterDeadline,firstDeadline);
+  f.advanceMonotonic(45000);
+  f.ui.render();
+  assert.match(f.element('#content').innerHTML,/Connected players are stale/);
+  assert.doesNotMatch(f.element('#content').innerHTML,/Alice|Mage/);
 });
 
 test('an independent log failure keeps successfully refreshed telemetry', async () => {
