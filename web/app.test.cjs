@@ -248,14 +248,15 @@ state.integrationView = 'discord';
 state.integrations = [];
 assert.match(context.ui.integrationsPage(), /No Discord bots configured yet/);
 state.deliveries = [
-  {id:'d1', integrationId:'bot', status:'sent', event:{serverId:'world-01'}, embed:{title:'Restart completed'}, result:'ok', attempts:1, updatedAt:'2026-09-18T00:00:01Z'},
-  {id:'d2', integrationId:'bot', status:'sent', event:{serverId:'missing-world', serverName:'<World & "name">'}, embed:{title:'Restart completed'}, result:'ok', attempts:1, updatedAt:'2026-09-18T00:00:00Z'},
+  {id:'d2', integrationId:'bot', status:'sent', event:{serverId:'missing-world', serverName:'<World & "name">'}, embed:{title:'Older alert'}, result:'ok', attempts:1, updatedAt:'2026-09-18T00:00:00Z'},
+  {id:'d1', integrationId:'bot', status:'sent', event:{serverId:'world-01'}, embed:{title:'Newer alert'}, result:'ok', attempts:1, updatedAt:'2026-09-18T00:00:01Z'},
 ];
 html = context.ui.integrationsPage();
 assert.match(html, /data-testid="discord-recent-delivery"/);
 assert.match(html, /PC2-US-EAST-01/);
 assert.match(html, /&lt;World &amp; &quot;name&quot;&gt;/);
 assert.doesNotMatch(html, /<World/);
+assert.ok(html.indexOf('Newer alert') < html.indexOf('Older alert'));
 state.deliveries = [];
 state.integrationView = 'hub';
 state.servers = savedServers;

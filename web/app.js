@@ -36,7 +36,7 @@ const pages = {
   events: ['Events', 'Search every server event in one place.'],
   maintenance: ['Maintenance', 'Make safe changes to your servers.'],
   users: ['Saved IDs', 'Manage reusable Dragonwilds player IDs.'],
-  integrations: ['Integrations', 'Send selected server alerts to Discord.'],
+  integrations: ['Integrations', 'Connect Discord and other alert destinations.'],
   reboots: ['Reboots', 'Schedule per-server restarts with predictable timezone rules.'],
 };
 const discordStatusCopy = {
@@ -608,7 +608,7 @@ function discordAlertsPage() {
     ${pending}<p class="inline-note">${demo}Choose events for each bot. Player joined alerts are approximate count increases, with no player identities. Backup alerts are unavailable until a backup producer exists.</p>${bots}</section>
     <section class="panel section-gap"><div class="panel-heading"><div><h2>Recent messages</h2><p>Newest first. Each message names the Dragonwilds server it belongs to.</p></div></div>
     <p class="inline-note">Uncertain means a message may have been sent. Check Discord before sending a new test. Uncertain deliveries never retry automatically. Disabling a rule cancels queued alerts; an in-flight send may finish.</p>
-    ${state.deliveries.length ? `<div class="recent-delivery-list">${state.deliveries.map(discordDeliveryCard).join('')}</div>` : '<p class="no-results">No deliveries recorded yet.</p>'}</section>`;
+    ${state.deliveries.length ? `<div class="recent-delivery-list">${[...state.deliveries].sort((a, b) => deliveryTime(b) - deliveryTime(a)).map(discordDeliveryCard).join('')}</div>` : '<p class="no-results">No deliveries recorded yet.</p>'}</section>`;
 }
 function integrationsPage() {
   if (!can('integrations')) return dashboard();

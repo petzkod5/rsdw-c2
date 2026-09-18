@@ -2,15 +2,15 @@
 
 The Integrations page is available to admins. OIDC viewers cannot read or change integrations, deliveries, or Secret references. OIDC mutations require the session CSRF token and the configured Origin. Token-mode requests require the admin bearer token. Session changes clear integration lists, delivery history, and open configuration forms.
 
-![Integrations page with Discord bot setup and delivery history panels.](screenshots/integrations.png)
+![Integrations hub with a Discord card, then the Discord alerts page.](screenshots/integrations.png)
 
 ## Configuration
 
 Create a Discord bot with permission to view the target channel and send messages. Put its token in a pre-created Kubernetes Secret in the C2 namespace. C2 reads that namespace from `RSDW_NAMESPACE`, which the chart supplies through the Downward API. Standalone processes default to `rsdw-system`.
 
-In Integrations, select **Add Discord bot**. Enter a name, the numeric guild and channel IDs, and the Secret name and key. Select the servers and alert rules, then save. The console accepts a Secret reference only. It has no bot-token input, and its API rejects token fields without echoing their values.
+In Integrations, open **Discord**. The card shows Not connected, Connected, or Disconnected. Select **Add Discord bot**. Enter a name, the numeric guild and channel IDs, and the Secret name and key. Select the servers and alert rules, then save. The console accepts a Secret reference only. It has no bot-token input, and its API rejects token fields without echoing their values.
 
-Use **Configure** to change server associations, rules, enabled state, or the Secret reference. Updating the referenced Secret also rotates the token because each attempt reads it again. The bot verifies that the channel belongs to the configured guild before sending. **Send test** queues a test even when automatic alerts are disabled. The delivery table reports its result.
+Use **Configure** to change server associations, rules, enabled state, or the Secret reference. Updating the referenced Secret also rotates the token because each attempt reads it again. The bot verifies that the channel belongs to the configured guild before sending. **Send test** queues a test even when automatic alerts are disabled. Recent messages lists each delivery with the Dragonwilds server it belongs to.
 
 Demo mode uses the same configuration and delivery state but simulates sends and restart completion. It does not read Secrets or contact Discord. Production telemetry is not simulated in demo mode.
 
