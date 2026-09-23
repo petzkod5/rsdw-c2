@@ -168,6 +168,18 @@ function pruneTelemetryCache(servers) {
   }
 }
 
+function hideCachedPlayerNames(serverId) {
+  state.rosterObservation = '';
+  state.rosterDeadline = 0;
+  const byRange = state.telemetryCache.get(serverId);
+  if (byRange) {
+    for (const [range, cached] of byRange) {
+      byRange.set(range, {...cached, result:{...cached.result, playerRoster:null}, rosterObservation:'', rosterDeadline:0});
+    }
+  }
+  if (state.telemetry?.server?.id === serverId) state.telemetry = {...state.telemetry, playerRoster:null};
+}
+
 function acceptTelemetry(result, startedAt, receivedAt) {
   const key = rosterObservationKey(result);
   const metric = result?.metrics?.players;
@@ -1182,6 +1194,7 @@ async function refresh() {
   let eventRange = state.eventRange;
   let serverId = state.serverId;
   let selectedId = selectedServer()?.id;
+  let telemetryReceived = false;
   const current = () => sequence === refreshSequence && epoch === state.epoch && page === state.page && range === state.range && eventRange === state.eventRange && serverId === state.serverId && selectedId === selectedServer()?.id && state.request === controller && !controller.signal.aborted;
   state.refreshing = true;
   $('#refresh').disabled = true;
@@ -1225,9 +1238,17 @@ async function refresh() {
       const telemetryStartedAt = monotonicNow();
       requests.push(api(`/api/servers/${encodeURIComponent(server.id)}/telemetry?range=${encodeURIComponent(range)}`,{signal:controller.signal}).then((result) => {
         if (!current()) return;
-        if (result.server?.id !== selectedId) throw new Error('Telemetry returned a different server. Please refresh to try again.');
+        if (result.server?.id !== selectedId) {
+          state.telemetryCache.delete(selectedId);
+          clearTelemetry();
+          throw new Error('Telemetry returned a different server. Please refresh to try again.');
+        }
         acceptTelemetry(result, telemetryStartedAt, monotonicNow());
+        telemetryReceived = true;
         render();
+      }).catch((error) => {
+        error.telemetryRequest = true;
+        throw error;
       }));
       if (state.page === 'telemetry' && can('logs') && server.status !== 'stopped') requests.push(loadLogs(controller.signal));
     }
@@ -1244,6 +1265,7 @@ async function refresh() {
     if (state.authRequired) { lockedState(); return; }
     $('#error-banner').textContent = error.message;
     $('#error-banner').hidden = false;
+    if (error.telemetryRequest && !telemetryReceived) hideCachedPlayerNames(selectedId);
     if (state.loaded) render();
     else $('#content').innerHTML = '<section class="panel empty"><div class="empty-icon">'+icon('warning')+'</div><h2>Unable to connect</h2><p>Your server inventory could not be loaded. Check the connection and try again.</p><button data-action="retry" data-testid="retry-connection">Try again</button></section>';
     $('#content').setAttribute('aria-busy','false');
