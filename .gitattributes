@@ -1,0 +1,2 @@
+# Keep line endings stable across platforms; shell scripts break with CRLF.
+* text=auto eol=lf
