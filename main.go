@@ -221,6 +221,7 @@ type HealthCheck struct {
 	Name   string    `json:"name"`
 	Status string    `json:"status"`
 	At     time.Time `json:"at"`
+	Reason string    `json:"reason,omitempty"`
 }
 
 type MetricDefinition struct {
@@ -617,6 +618,7 @@ func (demoOrchestrator) CheckUpdate(_ context.Context, server Server) (Server, e
 }
 
 type kubeOrchestrator struct {
+	telemetry       TelemetryConfig
 	runner          CommandRunner
 	helm            string
 	kubectl         string
@@ -1009,6 +1011,7 @@ type App struct {
 	orchestrator   Orchestrator
 	demo           bool
 	memoryPressure MemoryPressurePolicy
+	telemetryCfg   TelemetryConfig
 	auth           *Auth
 	imageRepo      string
 	telemetryOnce  sync.Once
@@ -1103,8 +1106,8 @@ func (a *App) handleBootstrap(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"deletions": snapshot.Deletions,
-		"servers":   servers, "events": recentEvents(snapshot.Events, 20), "mode": mode, "cluster": map[string]any{"name": envOr("RSDW_CLUSTER_NAME", "local-cluster"), "region": envOr("RSDW_CLUSTER_REGION", "eu-central"), "uptimeSeconds": int64(time.Since(startedAt).Seconds())},
+		"deletions": snapshot.Deletions, "telemetryConfig": a.telemetryConfig().view(),
+		"servers": servers, "events": recentEvents(snapshot.Events, 20), "mode": mode, "cluster": map[string]any{"name": envOr("RSDW_CLUSTER_NAME", "local-cluster"), "region": envOr("RSDW_CLUSTER_REGION", "eu-central"), "uptimeSeconds": int64(time.Since(startedAt).Seconds())},
 		"capabilities": capabilities(RoleAdmin),
 	})
 }
@@ -1690,6 +1693,13 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	telemetryCfg, err := telemetryConfigFromEnv()
+	if err == nil {
+		err = telemetryCfg.validateWith(memoryPressure)
+	}
+	if err != nil {
+		log.Fatal(err)
+	}
 	demo := strings.EqualFold(os.Getenv("RSDW_DEMO_DATA"), "true")
 	auth, err := authFromEnv(context.Background(), demo)
 	if err != nil {
@@ -1700,7 +1710,9 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	var orchestrator Orchestrator = newKubeOrchestrator()
+	kube := newKubeOrchestrator()
+	kube.telemetry = telemetryCfg
+	var orchestrator Orchestrator = kube
 	if demo {
 		orchestrator = demoOrchestrator{}
 	}
@@ -1708,7 +1720,7 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	app := &App{store: store, orchestrator: orchestrator, demo: demo, auth: auth, memoryPressure: memoryPressure, backups: backups}
+	app := &App{store: store, orchestrator: orchestrator, demo: demo, auth: auth, memoryPressure: memoryPressure, telemetryCfg: telemetryCfg, backups: backups}
 	if err := app.updateBackupBackend(); err != nil {
 		log.Fatal(err)
 	}
@@ -1716,7 +1728,7 @@ func main() {
 		log.Printf("backup repository recovery: %v", err)
 	}
 	go app.runSeedCleanup(context.Background())
-	go app.runCollector(context.Background(), 15*time.Second)
+	go app.runCollector(context.Background())
 	go app.runRebootScheduler(context.Background())
 	go app.runBackupScheduler(context.Background())
 	go app.runDeletionReconciler(context.Background())

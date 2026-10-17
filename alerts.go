@@ -56,7 +56,7 @@ func persistObservedStatus(state *State, server Server, o observation, now time.
 	default:
 		return current
 	}
-	if !o.at.IsZero() && now.Sub(o.at) <= telemetryMaxAge {
+	if !o.at.IsZero() && now.Sub(o.at) <= o.window() {
 		current.LastSeen = o.at.Format(time.RFC3339Nano)
 	}
 	state.Servers[server.ID] = current
@@ -71,7 +71,7 @@ func observeAlerts(state *State, server Server, o observation, now time.Time) {
 	if o.at.IsZero() || !o.at.After(p.LastAt) {
 		return
 	}
-	if now.Sub(o.at) > telemetryMaxAge || o.at.After(now) {
+	if now.Sub(o.at) > o.window() || o.at.After(now) {
 		return
 	}
 	server = persistObservedStatus(state, server, o, now)
@@ -80,7 +80,7 @@ func observeAlerts(state *State, server Server, o observation, now time.Time) {
 		state.Producers[server.ID] = p
 		return
 	}
-	if o.at.Sub(p.LastAt) > telemetryMaxAge {
+	if o.at.Sub(p.LastAt) > o.window() {
 		p.resetStreak()
 		p.PlayerAt = time.Time{}
 	}
@@ -122,7 +122,7 @@ func observeAlerts(state *State, server Server, o observation, now time.Time) {
 	if o.health == "healthy" && o.runtime != "" && reading.Value != nil && reading.Status == "available" && reading.ObservedAt != nil {
 		at, count := *reading.ObservedAt, int(*reading.Value)
 		roster := rosterEvidence(o.playerRoster, count)
-		if !p.PlayerAt.IsZero() && at.After(p.PlayerAt) && at.Sub(p.PlayerAt) <= telemetryMaxAge {
+		if !p.PlayerAt.IsZero() && at.After(p.PlayerAt) && at.Sub(p.PlayerAt) <= reading.window() {
 			if count > p.Players {
 				joined := joinedRoster(p.Roster, roster, count-p.Players)
 				details := fmt.Sprintf("Approximate increase of %d players (%d to %d); identities and joins between polls are unknown", count-p.Players, p.Players, count)

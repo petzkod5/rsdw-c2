@@ -62,6 +62,10 @@ func TestSourceTimeoutPreservesOtherMetrics(t *testing.T) {
 			k, base, server := collectorFixture()
 			runner := &deadlineRunner{base: base, block: tc.command}
 			k.runner = runner
+			// A blocked source waits out its own timeout; keep them short so
+			// every other source still fits in the test deadline.
+			k.telemetry = defaultTelemetryConfig()
+			k.telemetry.KubeTimeout, k.telemetry.HealthTimeout, k.telemetry.ExecTimeout = 300*time.Millisecond, 300*time.Millisecond, 300*time.Millisecond
 			ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
 			defer cancel()
 			got := k.collectObservation(ctx, server, nil)
@@ -477,13 +481,13 @@ func TestNetworkRates(t *testing.T) {
 	before, _ := parseNetwork([]byte(netFixture(100, 200)), "pod/container", now.Add(-15*time.Second))
 	current, _ := parseNetwork([]byte(netFixture(400, 800)), "pod/container", now)
 	metrics := emptyMetrics()
-	applyNetwork(metrics, &before, current)
+	applyNetwork(metrics, &before, current, telemetryMaxAge)
 	for key, value := range map[string]float64{"inboundBytesPerSecond": 20, "outboundBytesPerSecond": 40, "networkBytesPerSecond": 60} {
 		expectMetric(t, metrics, key, "available", number(value))
 	}
 	zero := before
 	zero.at = now
-	applyNetwork(metrics, &before, zero)
+	applyNetwork(metrics, &before, zero, telemetryMaxAge)
 	expectMetric(t, metrics, "networkBytesPerSecond", "available", number(0))
 	for _, kind := range []string{"pod", "reset", "interfaces", "time", "stale"} {
 		changed, _ := parseNetwork([]byte(netFixture(400, 800)), "pod/container", now)
@@ -499,7 +503,7 @@ func TestNetworkRates(t *testing.T) {
 		case "stale":
 			changed.at = now.Add(time.Minute)
 		}
-		applyNetwork(metrics, &before, changed)
+		applyNetwork(metrics, &before, changed, telemetryMaxAge)
 		expectMetric(t, metrics, "networkBytesPerSecond", "warming_up", nil)
 	}
 }

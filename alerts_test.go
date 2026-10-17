@@ -385,7 +385,11 @@ func TestCollectorQueuesPlayerEvents(t *testing.T) {
 		}
 		return nil, nil, false
 	}
+	// The new count arrives with the metrics pass. Alerts are evaluated on
+	// liveness observations, which carry the reading forward, so the next
+	// liveness pass queues the events.
 	app.collectTelemetry(context.Background())
+	app.collectLiveness(context.Background())
 	s := app.store.Snapshot()
 	if !slices.Equal(eventKinds(&s), []EventKind{PlayerJoined, PlayerLimitReached}) || len(s.Deliveries) != 2 {
 		t.Fatal(fmt.Sprint(eventKinds(&s)), len(s.Deliveries))

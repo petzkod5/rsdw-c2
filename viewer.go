@@ -49,7 +49,7 @@ func viewerServer(server Server) ViewerServer {
 
 func viewerMetricStatus(status string) string {
 	switch status {
-	case "available", "stale", "unsupported", "warming_up", "warming", "starting", "stopped", "unavailable":
+	case "available", "stale", "unsupported", "warming_up", "warming", "starting", "stopped", "unavailable", "disabled":
 		return status
 	default:
 		return "unavailable"
