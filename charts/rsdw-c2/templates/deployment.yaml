@@ -83,6 +83,38 @@ spec:
               value: {{ .Values.memoryPressure.thresholdPercent | quote }}
             - name: RSDW_MEMORY_PRESSURE_DURATION
               value: {{ .Values.memoryPressure.duration | quote }}
+            - name: RSDW_TELEMETRY_LIVENESS_INTERVAL
+              value: {{ .Values.telemetry.livenessInterval | quote }}
+            - name: RSDW_TELEMETRY_METRICS_INTERVAL
+              value: {{ .Values.telemetry.metricsInterval | quote }}
+            - name: RSDW_TELEMETRY_KUBE_TIMEOUT
+              value: {{ .Values.telemetry.timeouts.kube | quote }}
+            - name: RSDW_TELEMETRY_HEALTH_TIMEOUT
+              value: {{ .Values.telemetry.timeouts.health | quote }}
+            - name: RSDW_TELEMETRY_EXEC_TIMEOUT
+              value: {{ .Values.telemetry.timeouts.exec | quote }}
+            - name: RSDW_TELEMETRY_EXEC_METRICS_ENABLED
+              value: {{ .Values.telemetry.execMetrics.enabled | quote }}
+            - name: RSDW_TELEMETRY_RESOURCES_ENABLED
+              value: {{ .Values.telemetry.resources.enabled | quote }}
+            - name: RSDW_TELEMETRY_PLAYERS_ENABLED
+              value: {{ .Values.telemetry.players.enabled | quote }}
+            - name: RSDW_TELEMETRY_TICK_ENABLED
+              value: {{ .Values.telemetry.tick.enabled | quote }}
+            {{- with .Values.telemetry.tick.interval }}
+            - name: RSDW_TELEMETRY_TICK_INTERVAL
+              value: {{ . | quote }}
+            {{- end }}
+            - name: RSDW_TELEMETRY_NETWORK_ENABLED
+              value: {{ .Values.telemetry.network.enabled | quote }}
+            {{- with .Values.telemetry.network.interval }}
+            - name: RSDW_TELEMETRY_NETWORK_INTERVAL
+              value: {{ . | quote }}
+            {{- end }}
+            - name: RSDW_TELEMETRY_DISK_ENABLED
+              value: {{ .Values.telemetry.disk.enabled | quote }}
+            - name: RSDW_TELEMETRY_DISK_INTERVAL
+              value: {{ .Values.telemetry.disk.interval | quote }}
             - name: RSDW_BACKUP_PATH
               value: {{ .Values.backups.path | quote }}
             - name: RSDW_BACKUP_MAX_REPOSITORY_BYTES

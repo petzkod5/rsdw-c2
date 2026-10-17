@@ -10,6 +10,53 @@ memoryPressure:
   thresholdPercent: 85
   duration: 10m
 
+# How C2 polls every game server. Collection runs in two tiers.
+#
+# Liveness decides the server status (ONLINE, STARTING, NEEDS ATTENTION,
+# STOPPED). It reads the Deployment and Pod from the Kubernetes API and makes
+# at most one game API health probe (one kubectl exec) per server and interval.
+# A server leaves ONLINE only after two consecutive failed health probes, or
+# when Kubernetes itself says it is not ready or scaled to zero.
+#
+# Metrics fill the numbers on the Telemetry page (CPU, memory, players, ticks,
+# network, disk). They run on their own timers and can never change a server's
+# status: a metric that fails shows as unavailable with its reason.
+#
+# Every exec metric starts a short-lived process inside the game container,
+# which counts against the container's CPU limit. If the game stutters on a
+# tight CPU limit, set execMetrics.enabled=false: the only exec left is the
+# health probe (4 per minute and server by default). Status stays reliable;
+# players, network, disk and tick rate show as disabled. CPU and memory come
+# from the Kubernetes Metrics API and keep working.
+#
+# Intervals are Go durations. Bounds are enforced at startup; an invalid value
+# stops C2 with an error that names the variable. A reading stays fresh for
+# three intervals (never less than 45 seconds), so a slower interval also
+# widens how long its value is shown before it turns stale.
+telemetry:
+  livenessInterval: 15s # RSDW_TELEMETRY_LIVENESS_INTERVAL, 5s to 5m
+  metricsInterval: 60s # RSDW_TELEMETRY_METRICS_INTERVAL, 10s to 15m; base for resources, players, tick, network
+  # Per-request time limits. A slow answer inside the limit is still an answer.
+  timeouts:
+    kube: 5s # RSDW_TELEMETRY_KUBE_TIMEOUT, 1s to 30s, each kubectl get
+    health: 4s # RSDW_TELEMETRY_HEALTH_TIMEOUT, 1s to 30s, the game API health probe
+    exec: 4s # RSDW_TELEMETRY_EXEC_TIMEOUT, 1s to 30s, each exec metric
+  execMetrics:
+    enabled: true # RSDW_TELEMETRY_EXEC_METRICS_ENABLED, master switch for players, tick, network and disk
+  resources:
+    enabled: true # RSDW_TELEMETRY_RESOURCES_ENABLED, Kubernetes Metrics API (no exec). Required by memoryPressure.
+  players:
+    enabled: true # RSDW_TELEMETRY_PLAYERS_ENABLED, game /api/players (exec)
+  tick:
+    enabled: true # RSDW_TELEMETRY_TICK_ENABLED, game /api/metrics (exec)
+    interval: "" # RSDW_TELEMETRY_TICK_INTERVAL, 10s to 15m; empty follows metricsInterval
+  network:
+    enabled: true # RSDW_TELEMETRY_NETWORK_ENABLED, /proc/net/dev (exec)
+    interval: "" # RSDW_TELEMETRY_NETWORK_INTERVAL, 10s to 15m; empty follows metricsInterval
+  disk:
+    enabled: true # RSDW_TELEMETRY_DISK_ENABLED, df on the data mount (exec)
+    interval: 5m # RSDW_TELEMETRY_DISK_INTERVAL, 1m to 1h; disk changes slowly
+
 service:
   type: ClusterIP
   port: 8080
