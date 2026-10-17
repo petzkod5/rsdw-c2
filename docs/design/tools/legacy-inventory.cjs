@@ -1,0 +1,33 @@
+// Extracts data-action, case labels, data-testid values, capabilities and state keys from the legacy web/app.js.
+// Run from the repo root: node docs/design/tools/legacy-inventory.cjs .  (use it as the parity oracle while migrating)
+const fs = require('fs');
+const repo = process.argv[2];
+const app = fs.readFileSync(repo + '/web/app.js', 'utf8');
+const idx = fs.readFileSync(repo + '/web/index.html', 'utf8');
+const uniq = (a) => [...new Set(a)];
+const slice = (from, to) => app.slice(app.indexOf(from), app.indexOf(to));
+const rendered = uniq([...(app + idx).matchAll(/data-action="([^"]+)"/g)].map((m) => m[1])).sort();
+console.log('data-action rendered (' + rendered.length + '):', rendered.join(', '));
+const h = slice('async function handleAction', 'function navigate()');
+const hc = uniq([...h.matchAll(/case '([^']+)'/g)].map((m) => m[1])).sort();
+console.log('handleAction cases (' + hc.length + '):', hc.join(', '));
+const sm = slice('async function submitModal', 'function download(');
+const sc = uniq([...sm.matchAll(/case '([^']+)'/g)].map((m) => m[1])).sort();
+console.log('submitModal cases (' + sc.length + '):', sc.join(', '));
+const oc = slice('function openModal', 'async function loadImageTags');
+const oa = uniq([...oc.matchAll(/action === '([^']+)'/g)].map((m) => m[1])).concat(uniq([...oc.matchAll(/'([a-z-]+)'(?=[,\]])/g)].map((m) => m[1])).filter((x) => /-/.test(x))).filter((x, i, a) => a.indexOf(x) === i).sort();
+console.log('openModal action-ish tokens (' + oa.length + '):', oa.join(', '));
+const ids = uniq([...(app + idx).matchAll(/data-testid="([^"$]+)"/g)].map((m) => m[1])).sort();
+console.log('literal testids (' + ids.length + '):', ids.join(', '));
+const dyn = uniq([...app.matchAll(/data-testid="([a-z0-9-]*)\$\{/g)].map((m) => m[1]));
+console.log('dynamic testid prefixes:', dyn.join(', '));
+const caps = uniq([...app.matchAll(/can\('([^']+)'\)/g)].map((m) => m[1])).sort();
+console.log('can() capabilities used (' + caps.length + '):', caps.join(', '));
+const apis = uniq([...app.matchAll(/api\(`?'?(\/api\/[^'`?$]*)/g)].map((m) => m[1])).sort();
+console.log('api paths:', apis.join(' | '));
+const states = [...app.slice(app.indexOf('const state = {'), app.indexOf('const tokenKey')).matchAll(/(\w+)\s*:/g)].map((m) => m[1]);
+console.log('state keys (' + uniq(states).length + '):', uniq(states).join(', '));
+const dom = uniq([...app.matchAll(/\$\('#([a-zA-Z-]+)'\)/g)].map((m) => m[1])).sort();
+console.log('#ids touched imperatively (' + dom.length + '):', dom.join(', '));
+const handlers = [...app.matchAll(/document\.addEventListener\('(\w+)'|window\.addEventListener\('(\w+)'|\$\('#[\w-]+'\)\.addEventListener\('(\w+)'/g)].map((m) => m[0]);
+console.log('global listeners:', handlers.join(' ; '));
