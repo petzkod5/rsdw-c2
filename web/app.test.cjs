@@ -922,8 +922,29 @@ test('dashboard distinguishes the first observation from a failed status check',
   f.ui.state.servers[0].metrics.players = {status:'unavailable',reason:'Kubernetes check timed out'};
   row = f.ui.dashboardModel().rows[0];
   assert.equal(row.status,'unknown');
-  assert.equal(row.statusLabel,'Unable to confirm');
-  assert.equal(row.playersText,'Check failed / 4');
+  assert.equal(row.statusLabel,'Unknown');
+  assert.equal(row.playersText,'— / 4');
+});
+
+test('dashboard rows report status only and never show collection failures', () => {
+  const f = refreshFixture(false,{maintenance:true});
+  const failing = ['error','stale','unsupported','unavailable','faulted','disabled'];
+  for (const [status,label] of [['online','Online'],['starting','Starting'],['attention','Needs attention'],['stopped','Stopped'],['unknown','Unknown']]) {
+    for (const reading of failing) {
+      const metric = {status:reading,reason:'Game API players: context deadline exceeded'};
+      f.ui.state.servers = [{id:'a', status, maxPlayers:4, metrics:{players:metric, tickRate:metric, memoryUsedBytes:metric, memoryLimitBytes:metric, cpuPercent:metric}}];
+      const row = f.ui.dashboardModel().rows[0];
+      assert.equal(row.statusLabel,label,`${status} label`);
+      const text = [row.playersText,row.tickText,...row.resources.map((item) => item.text)].join(' | ');
+      assert.doesNotMatch(text,/Check failed|Collection failed|Unable to confirm|Stale|Unsupported|Disabled|Unavailable/i,`${status}/${reading}: ${text}`);
+    }
+  }
+  const warming = {status:'warming_up',reason:'Waiting for the first metrics sample'};
+  f.ui.state.servers = [{id:'a', status:'online', maxPlayers:4, metrics:{players:warming, tickRate:warming, memoryUsedBytes:warming, memoryLimitBytes:warming, cpuPercent:warming}}];
+  const row = f.ui.dashboardModel().rows[0];
+  assert.equal(row.statusLabel,'Online');
+  assert.equal(row.playersText,'Collecting / 4');
+  assert.equal(row.tickText,'Collecting');
 });
 
 test('paused telemetry expires names locally without another request', () => {
