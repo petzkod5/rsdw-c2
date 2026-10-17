@@ -167,7 +167,7 @@ func TestShellRunnerRejectsOutputOverflow(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
-			_, err := (shellRunner{}).Run(ctx, "sh", "-c", "while :; do printf 0123456789abcdef"+tc.redirect+"; done")
+			_, err := (shellRunner{}).Run(ctx, "sh", "-c", "chunk=$(printf '%04096d' 0); while :; do printf %s \"$chunk\""+tc.redirect+"; done")
 			if !errors.Is(err, errCommandOutputLimit) {
 				t.Fatalf("overflow error = %v", err)
 			}
@@ -276,8 +276,8 @@ func TestStoreRoundTrip(t *testing.T) {
 	if got := reloaded.Snapshot().Servers["world"].Name; got != "World" {
 		t.Fatalf("round trip name = %q, want World", got)
 	}
-	if mode, err := os.Stat(path); err != nil || mode.Mode().Perm() != 0o600 {
-		t.Fatalf("state file mode = %v, want 0600", mode.Mode().Perm())
+	if mode, err := os.Stat(path); err != nil || (hasPOSIXPermissions() && mode.Mode().Perm() != 0o600) {
+		t.Fatalf("state file mode = %v, want 0600 (err=%v)", mode, err)
 	}
 }
 
