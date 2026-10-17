@@ -10,6 +10,12 @@ memoryPressure:
   thresholdPercent: 85
   duration: 10m
 
+telemetry:
+  # Collect game tick-rate metrics from the game API /api/metrics endpoint.
+  # Unsupported by the default image: needs a tick-enabled rsdragonwilds image
+  # (rsdragonwilds-helm >= 0.2.0) running a game build its tick hook supports.
+  tickMetrics: false
+
 service:
   type: ClusterIP
   port: 8080

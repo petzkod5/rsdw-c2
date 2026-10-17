@@ -15,9 +15,15 @@ The dashboard schedules collection every 15 seconds, even when no browser is ope
 | Memory limit | Running Pod specification | The actual container memory ceiling, not the form's requested value. |
 | Pod traffic | Non-loopback `/proc/net/dev` counters | Received and transmitted bytes per second across the Pod network. Includes sidecar traffic and excludes loopback. Two readings are required. Pod changes, counter resets, and collection gaps restart the baseline. |
 | Data filesystem | `df` at `/home/steam/rsdw-dedicated` | Used bytes and capacity of the filesystem backing the data mount. On kind, this may be a shared filesystem. It is not world-save size or a PVC quota. |
-| Tick rate | Authenticated game `/api/metrics` | Completed UDomGameEngine::Tick calls divided by the measured window. Requires the tick-enabled rsdw_api build. |
-| Tick duration p50/p95/p99 | Authenticated game `/api/metrics` | Nearest-rank percentiles of elapsed wall time inside the game engine tick. Includes its nested engine/world tick and synchronous delegates. Excludes work outside that call. |
-| Tick window and sample count | Authenticated game `/api/metrics` | Actual elapsed window and number of completed calls used for both rate and percentiles. |
+| Tick rate | Authenticated game `/api/metrics` | Requires `RSDW_TICK_METRICS=true` and a tick-enabled image. Completed UDomGameEngine::Tick calls divided by the measured window. |
+| Tick duration p50/p95/p99 | Authenticated game `/api/metrics` | Requires `RSDW_TICK_METRICS=true` and a tick-enabled image. Nearest-rank percentiles of elapsed wall time inside the game engine tick. Includes its nested engine/world tick and synchronous delegates. Excludes work outside that call. |
+| Tick window and sample count | Authenticated game `/api/metrics` | Requires `RSDW_TICK_METRICS=true` and a tick-enabled image. Actual elapsed window and number of completed calls used for both rate and percentiles. |
+
+## Tick metrics are off by default
+
+Tick rate and tick duration are unsupported today and are disabled unless `RSDW_TICK_METRICS=true` (Helm: `telemetry.tickMetrics: true`). When disabled, C2 never calls the game `/api/metrics` endpoint. It emits no `tickRate`, `tickP50Ms`, `tickP95Ms`, `tickP99Ms`, `tickWindowSeconds`, or `tickSampleCount` keys in server metrics, telemetry samples, or metric definitions, and the console shows no tick tiles, chart, column, or CSV columns.
+
+The endpoint exists only in the tick patch shipped by `rsdragonwilds-helm` 0.2.0 and later. The default image (`0.1.1`) has no such route. The patch accepts only specific game executable builds and fails closed on others, including current Dragonwilds 1.0 builds. Enable the flag only with a tick-enabled image on a build its hook supports. See [issue #64](https://github.com/petzkod5/rsdw-c2/issues/64).
 
 Each metric has its own status, source, observation timestamp, and failure reason. A missing Metrics API does not suppress player data. A real zero is displayed as zero. An expired observation is stale and is not presented as current.
 
@@ -27,7 +33,7 @@ Charts use observation timestamps and preserve gaps. Their expandable tables pro
 
 Metrics Server provides CPU and memory, not historical storage, network throughput, disk usage, or game ticks. The kind startup script installs a pinned Metrics Server release. See [Kubernetes resource metrics](https://kubernetes.io/docs/tasks/debug/debug-cluster/resource-metrics-pipeline/) and [Metrics Server requirements](https://kubernetes-sigs.github.io/metrics-server/).
 
-The tick-enabled rsdw_api library wraps the verified UDomGameEngine tick at process startup. It changes a private in-memory function pointer, not Unreal or shipped game files. Support is limited to verified executable builds. An unknown build, absent endpoint, failed collection, or stale producer returns no numeric tick measurements. Configured frame limits, CPU consumption, and readiness are not substitutes for measured ticks.
+When `RSDW_TICK_METRICS=true`, the tick-enabled rsdw_api library wraps the verified UDomGameEngine tick at process startup. It changes a private in-memory function pointer, not Unreal or shipped game files. Support is limited to verified executable builds. An unknown build, absent endpoint, failed collection, or stale producer returns no numeric tick measurements. Configured frame limits, CPU consumption, and readiness are not substitutes for measured ticks.
 
 The producer retains up to 8192 completed calls in a ten-second lookback. A preceding completion anchors the actual elapsed window. Warmup requires an anchor and at least one second of observations. Long calls remain eligible when they complete. More than two seconds without a completion makes the producer stale. A complete-call window that exceeds storage capacity remains unavailable until the gap ages out.
 

@@ -83,6 +83,8 @@ spec:
               value: {{ .Values.memoryPressure.thresholdPercent | quote }}
             - name: RSDW_MEMORY_PRESSURE_DURATION
               value: {{ .Values.memoryPressure.duration | quote }}
+            - name: RSDW_TICK_METRICS
+              value: {{ .Values.telemetry.tickMetrics | quote }}
             - name: RSDW_BACKUP_PATH
               value: {{ .Values.backups.path | quote }}
             - name: RSDW_BACKUP_MAX_REPOSITORY_BYTES

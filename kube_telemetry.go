@@ -438,7 +438,9 @@ func (k *kubeOrchestrator) collectObservation(ctx context.Context, server Server
 			}
 		}
 	}
-	k.collectTicks(sourceCtx, target, result.metrics)
+	if tickMetricsEnabled() {
+		k.collectTicks(sourceCtx, target, result.metrics)
+	}
 	// kubectl exec pins a name, not a UID. Discard a collection spanning replacement.
 	var after telemetryPod
 	if err := k.kubeJSON(ctx, &after, "-n", target.pod.Metadata.Namespace, "get", "pod", target.pod.Metadata.Name, "-o", "json"); err != nil || !sameContainer(target, after) {

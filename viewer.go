@@ -57,8 +57,8 @@ func viewerMetricStatus(status string) string {
 }
 
 func viewerMetrics(metrics map[string]MetricReading) map[string]ViewerMetric {
-	result := make(map[string]ViewerMetric, len(metricCatalog))
-	for _, definition := range metricCatalog {
+	result := make(map[string]ViewerMetric, len(activeMetricCatalog()))
+	for _, definition := range activeMetricCatalog() {
 		reading := metrics[definition.key]
 		status := viewerMetricStatus(reading.Status)
 		value, reason := finiteMetric(reading.Value), ""
@@ -123,7 +123,7 @@ func viewerTelemetry(telemetry Telemetry) ViewerTelemetry {
 		}
 		result.HealthChecks = append(result.HealthChecks, ViewerHealthCheck{Name: "Game API engine readiness", Status: status, At: *ready.ObservedAt})
 	}
-	for _, definition := range metricCatalog {
+	for _, definition := range activeMetricCatalog() {
 		result.MetricDefinitions = append(result.MetricDefinitions, MetricDefinition{Metric: definition.key, Description: definition.description})
 	}
 	for _, sample := range telemetry.Samples {
@@ -134,7 +134,7 @@ func viewerTelemetry(telemetry Telemetry) ViewerTelemetry {
 		reasons := map[string]string{}
 		sourceTimes, _ := sample["observedAt"].(map[string]*time.Time)
 		sourceStatuses, _ := sample["status"].(map[string]string)
-		for _, definition := range metricCatalog {
+		for _, definition := range activeMetricCatalog() {
 			key := definition.key
 			value, _ := sample[key].(*float64)
 			value = finiteMetric(value)

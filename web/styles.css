@@ -158,6 +158,8 @@ tbody tr.deploying:hover { background: var(--color-nav-current); }
 .console-status .status { font-size: 14px; white-space: normal; }
 .console-label { display: block; font-size: 12px; text-transform: uppercase; color: var(--color-muted-foreground); font-weight: 400; }
 .console-metrics { display: grid; grid-template-columns: .8fr 1fr; gap: 18px; }
+.console-row.no-tick { grid-template-columns: minmax(140px,1.3fr) minmax(130px,.8fr) minmax(110px,.7fr) minmax(180px,1.25fr) minmax(130px,1fr) 130px; }
+.console-row.no-tick .console-metrics { grid-template-columns: 1fr; }
 .console-metrics strong { display: block; font-size: 18px; margin-top: 4px; white-space: nowrap; }
 .console-resources { display: grid; gap: 24px; }
 .console-resource { font-size: 12px; }

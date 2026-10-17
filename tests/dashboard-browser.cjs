@@ -53,6 +53,8 @@ async function run() {
     assert.equal(await row('cinder').locator('.console-badge').count(),2);
     assert.equal(await row('ember').locator('.console-bar').count(),0);
     assert.equal(await row('ember').getByRole('button').count(),1);
+    assert.equal(await page.locator('.console-row .console-label', {hasText:'Tick rate'}).count(),4);
+    assert.equal(await page.locator('.console-row.no-tick').count(),0);
     assert.deepEqual(await page.locator('.console-row').evaluateAll(rows=>rows.map(row=>row.getBoundingClientRect().height)),[140,140,140,140]);
     for (const width of [1600,1280,900,760,390]) {
       await page.setViewportSize({width,height:1155});
@@ -81,6 +83,7 @@ async function run() {
     assert.equal(new URL(page.url()).hash,'#dashboard');
     await page.getByRole('button',{name:'Table view',exact:true}).click();
     assert.equal(await page.locator('tbody tr').count(),4);
+    assert.deepEqual(await page.locator('thead th').allTextContents(),['Name','Status','Players','Tick rate','Resources','Uptime','Actions']);
     assert.match(await page.locator('tbody').innerText(),/10.20.0.23:7777/);
     await page.getByRole('button',{name:'Row view',exact:true}).click();
     const resourceBox = await row('brin').locator('.console-resources').boundingBox();
@@ -93,8 +96,25 @@ async function run() {
     await row('cinder').getByTestId('view-server').focus();
     await page.keyboard.press('Enter');
     await page.waitForURL('**/#servers/cinder');
+    // Servers that do not report tickRate (RSDW_TICK_METRICS off) show no tick UI at all.
+    for (const server of servers) delete server.metrics.tickRate;
+    await page.goto('http://dashboard.test/#dashboard');
+    await page.locator('.console-row').last().waitFor();
+    await page.waitForFunction(() => !state.refreshing);
+    assert.equal(await page.locator('.console-row.no-tick').count(),4);
+    assert.doesNotMatch(await page.locator('#content').innerText(),/Tick rate|Unsupported|Check failed|TPS/);
+    const playersBox = await row('aurora').locator('.console-metrics').boundingBox();
+    const resourcesBox = await row('aurora').locator('.console-resources').boundingBox();
+    assert.ok(playersBox && resourcesBox && resourcesBox.x - (playersBox.x + playersBox.width) < 60, 'players column leaves a gap');
+    await page.getByRole('button',{name:'Table view',exact:true}).click();
+    assert.deepEqual(await page.locator('thead th').allTextContents(),['Name','Status','Players','Resources','Uptime','Actions']);
+    await page.getByRole('button',{name:'Row view',exact:true}).click();
+    await page.goto('http://dashboard.test/#servers/aurora/telemetry');
+    await page.waitForFunction(() => !state.refreshing);
+    assert.doesNotMatch(await page.locator('#content').innerText(),/Tick rate|Tick execution duration|Unsupported|Check failed|tickRate/);
     viewer = true;
     await page.goto('http://dashboard.test/#dashboard');
+    await page.reload();
     await page.locator('.console-row').last().waitFor();
     assert.equal(await page.locator('.console-actions button,.console-badge.update,.console-schedule').count(),0);
     assert.doesNotMatch(await page.locator('#content').innerText(),/10\.20\.0/);

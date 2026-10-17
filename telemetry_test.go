@@ -234,7 +234,7 @@ func TestHTTPHistoryAndReadOnlyContract(t *testing.T) {
 				t.Fatalf("wire contract %s", body)
 			}
 			for _, sample := range telemetry.Samples {
-				for _, item := range metricCatalog {
+				for _, item := range activeMetricCatalog() {
 					if _, ok := sample[item.key]; !ok {
 						t.Fatalf("missing nullable key %s", item.key)
 					}
