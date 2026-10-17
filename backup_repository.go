@@ -15,7 +15,6 @@ import (
 	"sort"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 )
 
@@ -559,10 +558,10 @@ func (repository *LocalBackupRepository) withWriterLock(action func() error) err
 		return fmt.Errorf("open backup repository writer lock: %w", err)
 	}
 	defer lock.Close()
-	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX); err != nil {
+	if err := lockFileExclusive(lock); err != nil {
 		return fmt.Errorf("acquire backup repository writer lock: %w", err)
 	}
-	defer syscall.Flock(int(lock.Fd()), syscall.LOCK_UN)
+	defer unlockFile(lock)
 	return action()
 }
 
@@ -855,7 +854,7 @@ func syncDirectory(path string) error {
 		return fmt.Errorf("open directory for sync: %w", err)
 	}
 	defer directory.Close()
-	if err := directory.Sync(); err != nil {
+	if err := syncDirectoryHandle(directory); err != nil {
 		return fmt.Errorf("sync directory: %w", err)
 	}
 	return nil
