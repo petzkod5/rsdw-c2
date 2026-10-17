@@ -17,9 +17,8 @@ Defaults: 15 s interval, 1 server, a running pod with a LoadBalancer service tha
 | Short-lived processes started inside the game container (estimate, see 3.3) | about 11 | about 44 | about 132 |
 | `kubectl get` calls (console to API server, no game impact) | 6 (7 with the `get nodes` fallback) | 24 (28) | 72 (84) |
 | Total `kubectl` processes spawned in the console pod | 11 (12) | 44 (48) | 132 (144) |
-| `kubectl exec` per hour | 300 | 1,200 | 3,600 |
 
-Findings in one paragraph: the console never calls the game server from a browser request; the browser only reads an in-memory cache. All game-facing load comes from one background loop, `runCollector` at 15 s. Every cycle that loop runs five `kubectl exec` commands inside the game container, one of which is the only source of the liveness signal (`/api/health`), so cheap liveness and expensive metrics are currently coupled. Whether this causes visible lag is unproven: the load per exec is small, but the churn is continuous, exec'd processes are charged to the game container's cgroup (CPU quota), and the processes likely inherit `LD_PRELOAD` of the `rsdw_api` mod library (section 6). The measurement plan in section 9 decides it.
+Per hour that is 1,200 execs per server and 3,600 for the fleet. Findings in one paragraph: the console never calls the game server from a browser request; the browser only reads an in-memory cache. All game-facing load comes from one background loop, `runCollector` at 15 s. Every cycle that loop runs five `kubectl exec` commands inside the game container, one of which is the only source of the liveness signal (`/api/health`), so cheap liveness and expensive metrics are currently coupled. Whether this causes visible lag is unproven: the load per exec is small, but the churn is continuous, exec'd processes are charged to the game container's cgroup (CPU quota), and the processes likely inherit `LD_PRELOAD` of the `rsdw_api` mod library (section 3.3). The measurement plan in section 9 decides it.
 
 ## 3. Collector audit
 
@@ -59,12 +58,12 @@ Order is as executed in `collectObservation` (`kube_telemetry.go:374-487`). All 
 
 Counts: 5 execs (steps 6-10) plus 6 gets (1, 2, 3, 4, 5, 11), 7 when step 4 needs `get nodes`. Steps 1-3 and 11 are the real liveness inputs; step 6 supplies `engineReady`.
 
-Steps 7 and 10 each run a fresh `sh`, a command substitution (`cat` of the token) and `curl`. Steps 6, 7 and 10 therefore start roughly three short-lived processes each inside the game container; steps 8 and 9 start one each (`env` replaces itself with `df`). Hence about 11 processes per cycle. This is an estimate: `sh` may exec the final command directly depending on the shell (dash/bash version in the image); it was not measured.
+Steps 6, 7 and 10 each run a fresh `sh`, a command substitution (`cat` of the token) and `curl`, so each starts roughly three short-lived processes inside the game container; steps 8 and 9 start one each (`env` replaces itself with `df`). Hence about 11 processes per cycle. This is an estimate: `sh` may exec the final command directly depending on the shell (dash/bash version in the image); it was not measured.
 
 ### 3.3 What can hurt the game
 
 - Each `kubectl exec` is: kubectl process in console pod, then API server, then kubelet streaming server, then CRI runtime (`runc exec`), which joins the container's namespaces **and cgroup**. The new process runs under the container's CPU quota and memory limit. This is general runtime behaviour; the sources found for this audit show cgroups enforcing per-container limits but none states the exec case outright, so it is **[inference, to be verified in section 9]**.
-- Under CFS bandwidth control the quota is per cgroup (default 100 ms period): once exhausted, every thread in that cgroup waits for the next period ([kernel docs](https://docs.kernel.org/scheduler/sched-bwc.html)). The game container's default CPU limit is 1000m (`main.go:700-701`), so the budget is 100 ms of CPU per 100 ms period across all Unreal threads. Spawning 11 processes plus the runtime's exec setup every 15 s consumes a few tens of ms of CPU in bursts; whether that pushes a busy tick over the quota is an empirical question, and is most likely when the game is already near its limit.
+- Under CFS bandwidth control the quota is per cgroup (default 100 ms period): once exhausted, every thread in that cgroup waits for the next period ([kernel docs](https://docs.kernel.org/scheduler/sched-bwc.html)). The game container's default CPU limit is 1000m (`main.go:700-701`), so the budget is 100 ms of CPU per 100 ms period across all Unreal threads. Spawning 11 processes plus the runtime's exec setup every 15 s adds bursts of CPU whose size has not been measured; whether that pushes a busy tick over the quota is an empirical question, and is most likely when the game is already near its limit.
 - Throttling is invisible in average-CPU dashboards: one source reports a pod at 12% average CPU throttled 60% of the time ([jorijn.com](https://jorijn.com/en/knowledge-base/kubernetes/monitoring/kubernetes-cpu-throttling-pods-stall-low-utilisation/)). This is why the console's own CPU tiles (Metrics API average) cannot confirm or deny the hypothesis.
 - Timeout asymmetry: the exec has a 1.5 s client timeout, but the in-container `curl` has `--max-time 3` (`kube_telemetry.go:363`). Killing the local `kubectl` on timeout ends the client; sources report the in-container process may survive the disconnect ([codemia write-up](https://codemia.io/knowledge-hub/path/timeout_for_kubectl_exec), secondary source). So a slow mod API (for example during a long game hitch) can leave a curl and its shell behind for up to 3 s per overlapping cycle. Low risk, but worth checking with `ps` during a test.
 - A slow game is the worst case for the probe and the probe is then at its most intrusive: a stalled `/api/health` costs 1.5 s of waiting and the remaining steps are still attempted sequentially (they only share the 10.5 s source deadline). A failing mod API does not skip steps 7-10.
@@ -124,7 +123,7 @@ Conclusion: the collector is the only continuous source of load on the game cont
 2. **5 execs per server every 15 s, with about 11 short-lived processes in the game container**, i.e. 20 execs/min/server and 60/min for 3 servers. Nothing is configurable.
 3. **Liveness and metrics are coupled.** `engineReady` comes from an exec'd curl that runs in the same sequence as four optional metric execs, with a shared 10.5 s deadline. A transient failure there flips ONLINE to ATTENTION; a failed final `get pod` flips to UNKNOWN and wipes all metrics.
 4. **Three of the five execs have a host-side alternative** that does not run anything in the game container: CPU and memory already come from the Metrics API; network counters could come from kubelet/cAdvisor (`container_network_*`), not from `cat /proc/net/dev`; disk used/capacity could come from the kubelet stats summary or PVC metrics (`kubelet_volume_stats_*`). Disk changes slowly and needs minutes, not 15 s.
-5. **The two game API calls that matter (health, players) are legitimate but could be one call or a mod-side push.** `/api/health` is the only exec needed for a reliable engine-ready signal today. A Service-level probe (kubelet `readinessProbe` of type httpGet) already exists conceptually via pod `Ready`; if the chart's readiness probe covers the mod API, even `/api/health` from the console is redundant for ONLINE (see 8.1).
+5. **`/api/health` is the only exec the liveness signal needs.** `/api/players`, `/api/metrics`, `df` and `/proc/net/dev` are optional detail. If the game chart's readiness probe already checks the mod API (not verified; the chart is external), pod `Ready` makes even `/api/health` redundant for ONLINE (see 8.1).
 6. **The lag hypothesis is plausible but unproven.** The mechanism (CFS quota shared with exec'd processes, possible `LD_PRELOAD` inheritance) is credible and testable; the measured effect is unknown. Section 9 gives a falsifiable plan.
 7. **Worker contention risk.** If `lifecycleMu` is held by a backup or restart, `TryLock` fails and the observation is dropped (`telemetry.go:207-209`); the loop continues exec'ing but loses the result. Status then ages to `unknown` after 45 s. Liveness must not depend on that lock.
 
@@ -138,7 +137,7 @@ Conclusion: the collector is the only continuous source of load on the game cont
 | --- | --- | --- |
 | Replicas == 0 | Deployment `get` | None |
 | Pod exists, owned, Running | `get pods` | None |
-| Container Ready and Pod Ready conditions | Pod status (already includes the chart's readiness probe) | None |
+| Container Ready and Pod Ready conditions | Pod status (reflects the chart's readiness probe, if one is defined) | None |
 | Pod identity unchanged (UID, containerID, startedAt) | Same pod object read, no separate trailing `get` | None |
 | Engine readiness (optional, kept) | `/api/health` | One exec-curl (see below) |
 
@@ -157,7 +156,7 @@ Liveness runs on its own loop and never waits for Tier 2. Its observation is mer
 | --- | --- | --- | --- |
 | CPU, memory (Metrics API) | `get --raw /apis/metrics.k8s.io/...` | 30 s | No game impact; memory-pressure policy needs fresh samples, so memory stays at most 30 s |
 | Players + roster | `/api/players` (exec-curl) | 30 s | Alerts (player joined) tolerate 30 s; make the interval fixed to what alert logic documents |
-| Tick | `/api/metrics` (exec-curl) | 15 s default, but **off by default**? see below | Tick data is only valid for 2 s (`tickMaxAge`); a 15-60 s poll shows an instantaneous snapshot, not a continuous series. Value for lag diagnosis is high; cost is one exec-curl |
+| Tick | `/api/metrics` (exec-curl) | 30 s | Tick data is only valid for 2 s (`tickMaxAge`); a 15-60 s poll shows an instantaneous snapshot, not a continuous series. Value for lag diagnosis is high; cost is one exec-curl |
 | Network | `cat /proc/net/dev` (exec) | 60 s | Prefer kubelet/cAdvisor counters when available |
 | Disk | `df` (exec) | 300 s | Mirrors Pterodactyl's 150 s disk timer; disk changes slowly |
 
