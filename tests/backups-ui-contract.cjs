@@ -11,7 +11,7 @@ const server = http.createServer((request, response) => {
   const pathname = new URL(request.url, 'http://localhost').pathname;
   const name = pathname === '/' ? 'index.html' : pathname.slice(1);
   const file = path.join(webRoot, name);
-  if (!file.startsWith(webRoot + '/') || !fs.existsSync(file)) { response.writeHead(404).end(); return; }
+  if (!file.startsWith(webRoot + path.sep) || !fs.existsSync(file)) { response.writeHead(404).end(); return; }
   response.setHeader('Content-Type', name.endsWith('.js') ? 'text/javascript' : name.endsWith('.css') ? 'text/css' : 'text/html');
   response.end(fs.readFileSync(file));
 });

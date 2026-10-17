@@ -1,8 +1,14 @@
 const {spawn, spawnSync} = require('node:child_process');
 const {once} = require('node:events');
+const path = require('node:path');
 
 // POSIX groups children with a detached process group; Windows has no process groups, so kill the tree by pid.
 const canDetach = process.platform !== 'win32';
+
+// The server binary built by verify.sh; Go adds .exe on Windows.
+function serverBinary(root) {
+  return path.join(root, '.tmp', process.platform === 'win32' ? 'rsdw-c2.exe' : 'rsdw-c2');
+}
 
 function killTree(child, detached, signal = 'SIGTERM') {
   if (process.platform === 'win32') spawnSync('taskkill', ['/pid', String(child.pid), '/T', '/F'], {stdio: 'ignore'});
@@ -44,4 +50,4 @@ function fixtureProcesses(root) {
   return {start, close};
 }
 
-module.exports = {fixtureProcesses, killTree, canDetach};
+module.exports = {fixtureProcesses, killTree, canDetach, serverBinary};

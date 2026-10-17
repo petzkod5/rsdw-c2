@@ -18,7 +18,7 @@ test('fixture import survives a fresh importer process and preserves changed sav
     const imported = runImport(seed, 'World.sav', world);
     assert.equal(imported.status, 0, imported.stderr);
     assert.deepEqual(fs.readFileSync(path.join(world, 'World.sav')), content);
-    assert.equal(fs.statSync(path.join(world, 'World.sav')).mode & 0o777, 0o600);
+    if (process.platform !== 'win32') assert.equal(fs.statSync(path.join(world, 'World.sav')).mode & 0o777, 0o600);
     assert.deepEqual(fs.readdirSync(world).sort(), ['.seed-complete','World.sav']);
     assert.doesNotMatch(imported.stdout + imported.stderr, /private-save-fixture/);
     fs.writeFileSync(path.join(world, 'World.sav'), 'world-after-playing');
