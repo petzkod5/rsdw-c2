@@ -130,7 +130,6 @@ func telemetryConfigFromEnv() (TelemetryConfig, error) {
 	toggle(&cfg.ExecMetrics, "RSDW_TELEMETRY_EXEC_METRICS_ENABLED")
 	toggle(&cfg.Resources.Enabled, "RSDW_TELEMETRY_RESOURCES_ENABLED")
 	toggle(&cfg.Players.Enabled, "RSDW_TELEMETRY_PLAYERS_ENABLED")
-	toggle(&cfg.Tick.Enabled, "RSDW_TELEMETRY_TICK_ENABLED")
 	toggle(&cfg.Network.Enabled, "RSDW_TELEMETRY_NETWORK_ENABLED")
 	toggle(&cfg.Disk.Enabled, "RSDW_TELEMETRY_DISK_ENABLED")
 	if err != nil {
@@ -171,9 +170,13 @@ func (c TelemetryConfig) source(s metricSource) telemetrySourceConfig {
 }
 
 // sourceActive reports whether a source runs: it is enabled and, for exec
-// based sources, the exec master switch is on.
+// based sources, the exec master switch is on. Tick metrics are additionally
+// opt-in with RSDW_TICK_METRICS, because they need a tick-enabled game image.
 func (c TelemetryConfig) sourceActive(s metricSource) bool {
 	if s.execBased() && !c.ExecMetrics {
+		return false
+	}
+	if s == sourceTick && !tickMetricsEnabled() {
 		return false
 	}
 	return c.source(s).Enabled

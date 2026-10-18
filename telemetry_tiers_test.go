@@ -66,7 +66,6 @@ func TestTelemetryConfigDefaultsAndBounds(t *testing.T) {
 		"RSDW_TELEMETRY_EXEC_METRICS_ENABLED": "maybe",
 		"RSDW_TELEMETRY_RESOURCES_ENABLED":    "2",
 		"RSDW_TELEMETRY_PLAYERS_ENABLED":      "yes",
-		"RSDW_TELEMETRY_TICK_ENABLED":         "off",
 		"RSDW_TELEMETRY_NETWORK_ENABLED":      "n",
 		"RSDW_TELEMETRY_DISK_ENABLED":         "disabled",
 	} {
@@ -130,9 +129,15 @@ func TestTelemetryConfigViewReportsEffectiveValues(t *testing.T) {
 	if view.EstimatedExecsPerMinute != 4 {
 		t.Fatalf("liveness-only exec rate = %v, want 4 (one health probe every 15s)", view.EstimatedExecsPerMinute)
 	}
-	// 4 health probes + players, network and tick every 60s + disk every 300s.
-	if got := defaultTelemetryConfig().view().EstimatedExecsPerMinute; got != 4+3+0.2 {
+	// 4 health probes + players and network every 60s + disk every 300s, plus
+	// tick every 60s once tick metrics are opted in.
+	t.Setenv("RSDW_TICK_METRICS", "false")
+	if got := defaultTelemetryConfig().view().EstimatedExecsPerMinute; got != 4+2+0.2 {
 		t.Fatalf("default exec rate = %v", got)
+	}
+	t.Setenv("RSDW_TICK_METRICS", "true")
+	if got := defaultTelemetryConfig().view(); got.EstimatedExecsPerMinute != 4+3+0.2 || !got.Sources["tick"].Enabled {
+		t.Fatalf("exec rate with tick metrics = %v, tick = %+v", got.EstimatedExecsPerMinute, got.Sources["tick"])
 	}
 	if view.LivenessFreshnessSeconds != 45 || view.MetricFreshnessSeconds["players"] != 180 || view.MetricFreshnessSeconds["disk"] != 900 {
 		t.Fatalf("freshness = %+v", view)
@@ -594,5 +599,28 @@ func TestPassesOverlapSafely(t *testing.T) {
 	<-done
 	if calls.Load() != 5 {
 		t.Fatal("passes did not finish")
+	}
+}
+
+// Tick metrics are opt in (RSDW_TICK_METRICS): while off, the tick source never
+// runs and its keys are absent, not disabled.
+func TestTickSourceFollowsTheTickMetricsGate(t *testing.T) {
+	for _, enabled := range []bool{false, true} {
+		t.Run(map[bool]string{false: "off", true: "on"}[enabled], func(t *testing.T) {
+			t.Setenv("RSDW_TICK_METRICS", map[bool]string{false: "false", true: "true"}[enabled])
+			app, runner, server := fixtureApp(t)
+			app.collectTelemetry(context.Background())
+			got := serverStatusNow(app, server)
+			_, hasTick := got.Metrics["tickRate"]
+			if calls := countCalls(runner, "/api/metrics"); (calls > 0) != enabled || hasTick != enabled {
+				t.Fatalf("tick gate %t: /api/metrics calls=%d tickRate present=%t", enabled, calls, hasTick)
+			}
+			if got.Server.Status != StatusOnline {
+				t.Fatalf("status = %q", got.Server.Status)
+			}
+			if view := defaultTelemetryConfig().view(); view.Sources["tick"].Enabled != enabled {
+				t.Fatalf("telemetryConfig tick = %+v, want enabled=%t", view.Sources["tick"], enabled)
+			}
+		})
 	}
 }

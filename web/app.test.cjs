@@ -11,7 +11,8 @@ state.capabilities = {dashboard:true, telemetry:true, events:true, maintenance:t
 state.servers = [{id:'world', name:'Test world', status:'online', players:2, maxPlayers:4, metricsAvailable:false}];
 state.telemetry = {samples:[], healthChecks:[], metricDefinitions:[{metric:'tick_rate', description:'Ticks <per> second'}]};
 let html = telemetry();
-assert.match(html, /Tick rate \(TPS\) samples are not available yet/);
+assert.doesNotMatch(html, /Tick rate|Tick execution duration|Unsupported|Check failed|p95 tick duration/);
+assert.doesNotMatch(context.ui.telemetryRows().map((row) => row.metric).join(), /tick/);
 assert.match(html, /Inbound \(bytes\/s\) samples are not available yet/);
 assert.match(html, /Ticks &lt;per&gt; second/);
 assert.match(html, /data-testid="log-output"/);
@@ -1170,7 +1171,8 @@ test('maintenance shows deploy progress only for the selected watched server', (
   assert.doesNotMatch(maintenance(), /data-testid="deploy-progress"/);
   state.serverId = '';
   html = context.ui.dashboard();
-  assert.match(html, /class="console-row equal-height  deploying"/);
+  assert.match(html, /class="console-row equal-height  deploying no-tick"/);
+  assert.doesNotMatch(html, /Tick rate|Unsupported|Check failed/);
   state.dashboardView = 'table';
   assert.match(context.ui.dashboard(), /<tr class="deploying">/);
   state.dashboardView = 'rows';
@@ -1191,7 +1193,7 @@ test('dashboard model shares availability, badges, schedules and row actions acr
     {id:'a',worldName:'Aurora <&>',endpoint:'10.20.0.21:7777',status:'online',maxPlayers:12,metrics:{players:metric(5),tickRate:metric(60),memoryUsedBytes:metric(0),memoryLimitBytes:metric(1024),cpuPercent:metric(0)}},
     {id:'b',worldName:'Brin',endpoint:'10.20.0.22:7777',status:'online',maxPlayers:8,metrics:{players:metric(2)}},
     {id:'c',worldName:'Cinder',endpoint:'<host>:7777',status:'attention',updateAvailable:true,maxPlayers:4,metrics:{players:metric(2),memoryUsedBytes:{value:999,status:'stale'}}},
-    {id:'d',worldName:'Ember',status:'stopped',maxPlayers:16,metrics:{players:metric(99),cpuPercent:metric(90)}},
+    {id:'d',worldName:'Ember',status:'stopped',maxPlayers:16,metrics:{players:metric(99),tickRate:metric(60),cpuPercent:metric(90)}},
   ];
   const model = context.ui.dashboardModel();
   assert.deepEqual(JSON.parse(JSON.stringify(model.summary)),{total:4,online:3,players:9,capacity:40,incomplete:false});
@@ -1201,6 +1203,9 @@ test('dashboard model shares availability, badges, schedules and row actions acr
   assert.equal(model.rows[3].resources[1].percent,null);
   assert.equal(model.rows[3].playersText,'0 / 16');
   assert.equal(model.rows[3].tickText,'Stopped');
+  assert.equal(model.rows[0].tickText,'60 TPS');
+  assert.equal(model.rows[1].tickText,null);
+  assert.equal(model.rows[2].tickText,null);
   assert.equal(model.rows[0].schedule.text,vm.runInContext("date('2030-01-02T00:00:00Z')",context));
   assert.equal(model.rows[2].schedule.text,'Not scheduled');
   html = context.ui.dashboard();
@@ -1215,9 +1220,12 @@ test('dashboard model shares availability, badges, schedules and row actions acr
   assert.match(html,/data-action="start" data-id="d"/);
   assert.doesNotMatch(html,/data-action="(?:restart|stop)" data-id="d"/);
   assert.match(html,/aria-label="Resources"/);
+  assert.equal((html.match(/console-label">Tick rate/g) || []).length,2);
+  assert.equal((html.match(/console-row equal-height[^"]* no-tick"/g) || []).length,2);
   state.dashboardView = 'table';
   html = context.ui.dashboard();
   assert.match(html,/<table>/);
+  assert.match(html,/<th>Tick rate<\/th>/);
   assert.match(html,/Row view/);
   assert.match(html,/data-action="stop" data-id="c"/);
   state.fleetFilter = 'online';
@@ -1236,4 +1244,29 @@ test('dashboard model shares availability, badges, schedules and row actions acr
   state.dashboardView = 'rows';
   html = context.ui.dashboard();
   assert.doesNotMatch(html,/10\.20|&lt;host|Next reboot|console-badge update|data-action="(?:start|stop|restart)"/);
+});
+
+test('tick UI is rendered only when the server reports tickRate', () => {
+  state.capabilities = {dashboard:true, telemetry:true, maintenance:true, create:true};
+  state.rebootsAvailable = true;
+  state.reboots = [];
+  state.fleetFilter = 'all';
+  const metric = (value) => ({value,status:'available'});
+  const base = {players:metric(2), memoryUsedBytes:metric(1), memoryLimitBytes:metric(2), cpuPercent:metric(1)};
+  const tickMetrics = {tickRate:metric(30), tickP50Ms:metric(1), tickP95Ms:metric(2), tickP99Ms:metric(3), tickWindowSeconds:metric(10), tickSampleCount:metric(300)};
+  state.servers = [{id:'a', worldName:'A', status:'online', maxPlayers:4, metrics:base}];
+  state.dashboardView = 'table';
+  assert.doesNotMatch(context.ui.dashboard(), /Tick rate|Unsupported|Check failed/);
+  state.servers[0].metrics = {...base, ...tickMetrics};
+  assert.match(context.ui.dashboard(), /<th>Tick rate<\/th>/);
+  state.dashboardView = 'rows';
+  state.serverId = 'a';
+  state.telemetry = {samples:[], healthChecks:[], metrics:base, metricDefinitions:[{metric:'players', description:'p'}, {metric:'tickRate', description:'t'}]};
+  let html = context.ui.telemetry();
+  assert.doesNotMatch(html, /Tick rate|Tick execution duration|tickRate|Unsupported/);
+  state.telemetry.metrics = {...base, ...tickMetrics};
+  html = context.ui.telemetry();
+  assert.match(html, /Tick rate/);
+  assert.match(html, /Tick execution duration/);
+  assert.match(html, /<td>tickRate<\/td>/);
 });

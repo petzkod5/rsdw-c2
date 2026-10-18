@@ -99,8 +99,8 @@ spec:
               value: {{ .Values.telemetry.resources.enabled | quote }}
             - name: RSDW_TELEMETRY_PLAYERS_ENABLED
               value: {{ .Values.telemetry.players.enabled | quote }}
-            - name: RSDW_TELEMETRY_TICK_ENABLED
-              value: {{ .Values.telemetry.tick.enabled | quote }}
+            - name: RSDW_TICK_METRICS
+              value: {{ .Values.telemetry.tickMetrics | quote }}
             {{- with .Values.telemetry.tick.interval }}
             - name: RSDW_TELEMETRY_TICK_INTERVAL
               value: {{ . | quote }}

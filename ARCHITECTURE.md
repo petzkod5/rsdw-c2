@@ -10,7 +10,7 @@ The service stores one JSON document with these records:
 Server {
   id, name, namespace, release, region,
   ownerId, currentImage, desiredImage,
-  status, players, maxPlayers, tickRate,
+  status, players, maxPlayers,
   cpuPercent, memoryUsedBytes, memoryLimitBytes, diskPercent,
   networkBytesPerSecond, uptimeSeconds, lastRestart, lastSeen,
   updateAvailable, endpoint

@@ -34,6 +34,12 @@ memoryPressure:
 # three intervals (never less than 45 seconds), so a slower interval also
 # widens how long its value is shown before it turns stale.
 telemetry:
+  # Collect game tick-rate metrics from the game API /api/metrics endpoint
+  # (RSDW_TICK_METRICS). Unsupported by the default image: needs a tick-enabled
+  # rsdragonwilds image (rsdragonwilds-helm >= 0.2.0) running a game build its
+  # tick hook supports. When on, the tick source follows tick.interval below
+  # and the execMetrics switch.
+  tickMetrics: false
   livenessInterval: 15s # RSDW_TELEMETRY_LIVENESS_INTERVAL, 5s to 5m
   metricsInterval: 60s # RSDW_TELEMETRY_METRICS_INTERVAL, 10s to 15m; base for resources, players, tick, network
   # Per-request time limits. A slow answer inside the limit is still an answer.
@@ -48,8 +54,7 @@ telemetry:
   players:
     enabled: true # RSDW_TELEMETRY_PLAYERS_ENABLED, game /api/players (exec)
   tick:
-    enabled: true # RSDW_TELEMETRY_TICK_ENABLED, game /api/metrics (exec)
-    interval: "" # RSDW_TELEMETRY_TICK_INTERVAL, 10s to 15m; empty follows metricsInterval
+    interval: "" # RSDW_TELEMETRY_TICK_INTERVAL, 10s to 15m; empty follows metricsInterval (game /api/metrics, exec)
   network:
     enabled: true # RSDW_TELEMETRY_NETWORK_ENABLED, /proc/net/dev (exec)
     interval: "" # RSDW_TELEMETRY_NETWORK_INTERVAL, 10s to 15m; empty follows metricsInterval

@@ -9,6 +9,13 @@
       "minLength": 2,
       "pattern": "^\\+?(?:[0-9]{1,6}h)?(?:[0-9]{1,6}m)?(?:[0-9]{1,6}s)?(?:[0-9]{1,6}ms)?(?:[0-9]{1,6}(?:us|\u00b5s|\u03bcs))?(?:[0-9]{1,6}ns)?$",
       "not": {"pattern": "^\\+?([0.]+(ns|us|\u00b5s|\u03bcs|ms|s|m|h))+$"}
+    },
+    "optionalDuration": {"anyOf": [{"enum": [""]}, {"$ref": "#/definitions/duration"}]},
+    "toggle": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["enabled"],
+      "properties": {"enabled": {"type": "boolean"}}
     }
   },
   "properties": {
@@ -41,67 +48,42 @@
     "telemetry": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["livenessInterval", "metricsInterval", "timeouts", "execMetrics", "resources", "players", "tick", "network", "disk"],
+      "required": ["tickMetrics", "livenessInterval", "metricsInterval", "timeouts", "execMetrics", "resources", "players", "tick", "network", "disk"],
       "properties": {
+        "tickMetrics": {"type": "boolean"},
         "livenessInterval": {"$ref": "#/definitions/duration"},
         "metricsInterval": {"$ref": "#/definitions/duration"},
         "timeouts": {
           "type": "object",
           "additionalProperties": false,
           "required": ["kube", "health", "exec"],
-          "properties": {"kube": {"$ref": "#/definitions/duration"}, "health": {"$ref": "#/definitions/duration"}, "exec": {"$ref": "#/definitions/duration"}}
+          "properties": {
+            "kube": {"$ref": "#/definitions/duration"},
+            "health": {"$ref": "#/definitions/duration"},
+            "exec": {"$ref": "#/definitions/duration"}
+          }
         },
-        "execMetrics": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["enabled"],
-      "properties": {
-        "enabled": {"type": "boolean"}
-      }
-    },
-        "resources": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["enabled"],
-      "properties": {
-        "enabled": {"type": "boolean"}
-      }
-    },
-        "players": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["enabled"],
-      "properties": {
-        "enabled": {"type": "boolean"}
-      }
-    },
+        "execMetrics": {"$ref": "#/definitions/toggle"},
+        "resources": {"$ref": "#/definitions/toggle"},
+        "players": {"$ref": "#/definitions/toggle"},
         "tick": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["enabled", "interval"],
-      "properties": {
-        "enabled": {"type": "boolean"},
-          "interval": {"anyOf": [{"enum": [""]}, {"$ref": "#/definitions/duration"}]}
-      }
-    },
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["interval"],
+          "properties": {"interval": {"$ref": "#/definitions/optionalDuration"}}
+        },
         "network": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["enabled", "interval"],
-      "properties": {
-        "enabled": {"type": "boolean"},
-          "interval": {"anyOf": [{"enum": [""]}, {"$ref": "#/definitions/duration"}]}
-      }
-    },
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["enabled", "interval"],
+          "properties": {"enabled": {"type": "boolean"}, "interval": {"$ref": "#/definitions/optionalDuration"}}
+        },
         "disk": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["enabled", "interval"],
-      "properties": {
-        "enabled": {"type": "boolean"},
-          "interval": {"$ref": "#/definitions/duration"}
-      }
-    }
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["enabled", "interval"],
+          "properties": {"enabled": {"type": "boolean"}, "interval": {"$ref": "#/definitions/duration"}}
+        }
       }
     },
     "service": {

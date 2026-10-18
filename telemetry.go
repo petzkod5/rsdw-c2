@@ -4,7 +4,9 @@ import (
 	"context"
 	"log"
 	"math"
+	"os"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 )
@@ -78,7 +80,7 @@ func errorRoster(reason string) PlayerRoster {
 	return PlayerRoster{Status: RosterError, Reason: reason}
 }
 
-var metricCatalog = []struct{ key, unit, source, description string }{
+var fullMetricCatalog = []struct{ key, unit, source, description string }{
 	{"players", "players", "game API /api/players", "Connected players reported by the authenticated game API."},
 	{"uptimeSeconds", "seconds", "game API /api/health", "Game API process uptime."},
 	{"engineReady", "boolean", "game API /api/health", "Engine readiness reported by the game API, 0 or 1."},
@@ -101,9 +103,39 @@ var metricCatalog = []struct{ key, unit, source, description string }{
 	{"tickSampleCount", "ticks", tickSource, "Completed calls represented by the tick snapshot."},
 }
 
+// tickMetricsEnabled reports whether RSDW_TICK_METRICS opts in to the game API tick
+// snapshot, which needs the tick-patched rsdragonwilds image.
+func tickMetricsEnabled() bool {
+	return strings.EqualFold(strings.TrimSpace(os.Getenv("RSDW_TICK_METRICS")), "true")
+}
+
+func isTickKey(key string) bool {
+	for _, tickKey := range tickKeys {
+		if key == tickKey {
+			return true
+		}
+	}
+	return false
+}
+
+// activeMetricCatalog omits the tick metrics unless they are enabled.
+func activeMetricCatalog() []struct{ key, unit, source, description string } {
+	if tickMetricsEnabled() {
+		return fullMetricCatalog
+	}
+	catalog := make([]struct{ key, unit, source, description string }, 0, len(fullMetricCatalog))
+	for _, item := range fullMetricCatalog {
+		if !isTickKey(item.key) {
+			catalog = append(catalog, item)
+		}
+	}
+	return catalog
+}
+
 func emptyMetrics() map[string]MetricReading {
-	metrics := make(map[string]MetricReading, len(metricCatalog))
-	for _, item := range metricCatalog {
+	catalog := activeMetricCatalog()
+	metrics := make(map[string]MetricReading, len(catalog))
+	for _, item := range catalog {
 		metrics[item.key] = MetricReading{Status: "unavailable", Source: item.source, Unit: item.unit, Reason: "No observation collected"}
 	}
 	return metrics
@@ -767,7 +799,7 @@ func (a *App) telemetryFor(server Server, requestedRange string) Telemetry {
 	} else if players.Status == "error" {
 		result.PlayerRoster = unavailableRoster("Player count collection failed")
 	}
-	for _, item := range metricCatalog {
+	for _, item := range activeMetricCatalog() {
 		result.MetricDefinitions = append(result.MetricDefinitions, MetricDefinition{Metric: item.key, Description: item.description})
 	}
 	for _, item := range history {

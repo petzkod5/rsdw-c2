@@ -7,7 +7,6 @@ mkdir -p .tmp
 
 go test ./...
 go vet ./...
-python3 verification/check-tick-evidence.py verification/tick-live-observations.json
 node --check web/app.js
 node --test web/app.test.cjs
 node --test verification/save-import.test.cjs
