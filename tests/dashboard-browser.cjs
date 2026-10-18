@@ -99,6 +99,8 @@ async function run() {
     // Servers that do not report tickRate (RSDW_TICK_METRICS off) show no tick UI at all.
     for (const server of servers) delete server.metrics.tickRate;
     await page.goto('http://dashboard.test/#dashboard');
+    // Reload so the dashboard starts from an unscoped server list; a hash change alone can keep the previous server filter.
+    await page.reload();
     await page.locator('.console-row').last().waitFor();
     await page.waitForFunction(() => !state.refreshing);
     assert.equal(await page.locator('.console-row.no-tick').count(),4);
