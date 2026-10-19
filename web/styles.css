@@ -403,6 +403,7 @@ input[type=file]::file-selector-button { font: inherit; border: 1px solid var(--
 .login-art-image { display: block; width: 100%; height: 100%; object-fit: cover; opacity: 0; transition: opacity .35s ease-out; }
 .login-art-image.is-loaded { opacity: 1; }
 .login-heading { text-shadow: 0 2px 8px #000,0 0 24px #000a; }
+.login-heading h1:focus { outline: none; }
 .login-heading h1 { font-size: clamp(2rem,2.8vw,3rem); font-weight: 600; letter-spacing: -.025em; overflow-wrap: anywhere; }
 .login-heading p { margin-top: 2px; font-size: clamp(1rem,1.5vw,1.5rem); font-weight: 600; }
 .login-actions { grid-row: 3; display: flex; flex-direction: column; align-items: center; gap: 12px; min-width: 0; }

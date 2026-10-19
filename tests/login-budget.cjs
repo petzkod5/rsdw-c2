@@ -105,7 +105,7 @@ async function run() {
   assert.equal(index.status(), 200);
   assert.equal(index.headers()['cache-control'], 'no-cache');
   assert.match(index.headers()['etag'], /^"[a-f0-9]{32}/);
-  assert.ok(index.headers()['last-modified']);
+  assert.equal(index.headers()['last-modified'], undefined, 'Last-Modified is deliberately omitted; the ETag validates');
   assert.equal(index.headers()['content-encoding'], 'gzip');
   assert.match(index.headers()['vary'], /Accept-Encoding/i);
   const html = await index.text();
@@ -183,6 +183,9 @@ async function run() {
     await page.goto(`${base}/`, {waitUntil:'commit'});
     await within(authGate.reached, '/api/auth was never requested');
     await page.locator('#boot-shell').waitFor({state:'visible'});
+    assert.equal(await page.getByRole('heading', {level:1}).count(), 1, 'boot shell must expose exactly one heading while #page-title is hidden');
+    assert.equal(await page.getByRole('heading', {level:1}).textContent(), 'Dragonwilds Control');
+    assert.equal(await page.locator('#boot-shell .boot-note').textContent(), 'Connecting…');
     assert.equal(await page.locator('.login-scene').count(), 0, 'login scene mounted before /api/auth answered');
     assert.equal(await page.locator('[data-testid="open-login"]').count(), 0);
     assert.equal(tracker.heroes().length, 0);
@@ -196,10 +199,44 @@ async function run() {
     const placeholder = await page.locator('.login-art').evaluate((element) => getComputedStyle(element).backgroundImage);
     assert.match(placeholder, /^url\("data:image\/webp;base64,/, 'inline placeholder is missing');
     assert.equal(await page.locator('#boot-shell').isVisible(), false);
+    assert.equal(await page.locator('#boot-shell .boot-note').textContent(), 'Sign in required', 'live region must announce the transition');
+    assert.equal(await page.evaluate(() => document.activeElement?.id), 'login-scene-title', 'focus must move to the login heading');
+    assert.equal(await page.getByRole('heading', {level:1}).count(), 1, 'exactly one visible h1 once the scene mounts');
     await button.click();
     await page.getByTestId('admin-token').waitFor({state:'visible'});
     heroGate.release();
     await page.waitForFunction(() => document.querySelector('.login-art-image.is-loaded'));
+    await context.close();
+  }
+
+  // A hung /api/auth must end in the error path instead of leaving "Connecting..." up forever. The fake clock
+  // drives both the 8 s boot deadline and the 10 s poll, so nothing sleeps.
+  {
+    const context = await browser.newContext(DEVICES.desktop);
+    const page = await context.newPage();
+    await page.clock.install();
+    let authRequests = 0;
+    let firstRequest;
+    const firstSeen = new Promise((resolve) => { firstRequest = resolve; });
+    await page.route((url) => url.pathname === '/api/auth', async (route) => {
+      authRequests++;
+      if (authRequests === 1) { firstRequest(); return; } // never answered
+      await route.continue();
+    });
+    await page.goto(`${base}/`, {waitUntil:'commit'});
+    await within(firstSeen, '/api/auth was never requested');
+    await page.locator('#boot-shell').waitFor({state:'visible'});
+    await page.clock.fastForward(7000);
+    assert.equal(await page.locator('#boot-shell').isVisible(), true, 'gave up before the 8 s deadline');
+    await page.clock.fastForward(1500);
+    await page.locator('#error-banner').waitFor({state:'visible'});
+    assert.match(await page.locator('#error-banner').textContent(), /Timed out/);
+    await page.getByTestId('retry-connection').waitFor({state:'visible'});
+    assert.equal(await page.locator('#boot-shell').isVisible(), false);
+    assert.equal(authRequests, 1);
+    await page.clock.fastForward(10500); // the 10 s poll retries and, this time, gets an answer
+    await page.getByTestId('open-login').waitFor({state:'visible'});
+    assert.equal(authRequests, 2);
     await context.close();
   }
 
