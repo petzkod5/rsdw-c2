@@ -73,7 +73,9 @@ async function run() {
     await page.clock.fastForward(100000);
     assert.equal(await panel.locator('li').count(),3);
     await page.clock.fastForward(21000);
-    assert.match(await panel.innerText(),/Connected players are stale/);
+    // The overview shows the neutral text with no call to action; the Telemetry page keeps the stale wording.
+    assert.match(await panel.innerText(),/Connected players are unavailable\./);
+    assert.doesNotMatch(await panel.innerText(),/stale|Refresh telemetry/);
     assert.equal(await panel.locator('li').count(),0);
     assert.deepEqual(errors,[]);
     await page.goto('http://roster.test/#servers/missing%3Cscript%3E');

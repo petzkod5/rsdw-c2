@@ -77,24 +77,77 @@ func markUnavailable(metrics map[string]MetricReading, reason string) {
 	}
 }
 
-// refreshEndpoint fills the join address of the observation. The Service read
-// is one cheap Kubernetes API call, not an exec, so the liveness tier owns it:
-// the address is known as soon as the first pass ends, and carries forward
-// until the next refresh. A missing address is retried on every pass; a known
-// one is re-read once per metrics interval, since Service addresses rarely
-// change.
-func (k *kubeOrchestrator) refreshEndpoint(ctx context.Context, server Server, previous *observation, result *observation, cfg TelemetryConfig) {
-	now := time.Now().UTC()
+// endpointFastAttempts is how many consecutive passes may re-read the Service
+// of a server whose address is not known. After that the read happens once per
+// metrics interval, like a known address.
+const endpointFastAttempts = 3
+
+// endpointInfo is the join address of a server and how much is known about it.
+type endpointInfo struct {
+	address string
+	// state is endpointResolved, endpointPending or endpointNone. Empty means
+	// the Service has not been read yet.
+	state string
+	// at is when the Service was last read, or the read last failed.
+	at time.Time
+	// attempts counts the reads since the address was last resolved.
+	attempts int
+}
+
+// due reports whether the Service should be read on this pass. An unknown
+// address is retried on every pass for the first few attempts, since a
+// LoadBalancer ingress usually appears within seconds; after that, and for a
+// known address, the read happens once per metrics interval.
+func (e endpointInfo) due(now time.Time, interval time.Duration) bool {
+	if e.at.IsZero() {
+		return true
+	}
+	if e.state != endpointResolved && e.attempts < endpointFastAttempts {
+		return true
+	}
+	return now.Sub(e.at) >= interval
+}
+
+// readEndpoint reads the Service once, without the backoff.
+func (k *kubeOrchestrator) readEndpoint(ctx context.Context, server Server) endpointInfo {
+	return k.nextEndpoint(ctx, server, endpointInfo{}, time.Now().UTC())
+}
+
+// nextEndpoint reads the Service and folds the result into current. A failed
+// read learns nothing, so the last known address and state stay.
+func (k *kubeOrchestrator) nextEndpoint(ctx context.Context, server Server, current endpointInfo, now time.Time) endpointInfo {
+	address, state, ok := k.lookupEndpoint(ctx, server)
+	current.at = now
+	switch {
+	case !ok:
+		if current.state == "" {
+			current.state = endpointPending
+		}
+		if current.address == "" {
+			current.attempts++
+		}
+	case state == endpointResolved:
+		current.address, current.state, current.attempts = address, state, 0
+	default:
+		current.address, current.state, current.attempts = "", state, current.attempts+1
+	}
+	return current
+}
+
+// refreshEndpoint returns the join address for the observation that follows
+// previous. The Service read is one cheap Kubernetes API call, not an exec. It
+// is auxiliary: the caller runs it beside the status work and applies it after
+// the status is recorded, so a slow or hung Service read cannot delay either.
+func (k *kubeOrchestrator) refreshEndpoint(ctx context.Context, server Server, previous *observation, cfg TelemetryConfig) endpointInfo {
+	var current endpointInfo
 	if previous != nil {
-		result.endpoint, result.endpointAt = previous.endpoint, previous.endpointAt
+		current = previous.endpoint
 	}
-	if result.endpoint != "" && now.Sub(result.endpointAt) < cfg.MetricsInterval {
-		return
+	now := time.Now().UTC()
+	if !current.due(now, cfg.MetricsInterval) {
+		return current
 	}
-	if resolved := k.resolveEndpoint(ctx, server); resolved != "" {
-		result.endpoint = resolved
-	}
-	result.endpointAt = now
+	return k.nextEndpoint(ctx, server, current, now)
 }
 
 // collectLiveness is the status tier. It reads the Deployment and Pod from the
@@ -111,7 +164,6 @@ func (k *kubeOrchestrator) collectLiveness(ctx context.Context, server Server, p
 	defer cancel()
 	window := cfg.livenessWindow()
 	result := observation{metrics: emptyMetricsFor(cfg), playerRoster: unavailableRoster("Player roster was not collected"), status: StatusUnknown, maxAge: window}
-	k.refreshEndpoint(ctx, server, previous, &result, cfg)
 	target, status, err := k.resolvePod(ctx, server)
 	if err != nil && status == StatusUnknown {
 		return observation{}, err

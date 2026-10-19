@@ -188,7 +188,7 @@ func TestLivenessPassResolvesAndCarriesTheEndpoint(t *testing.T) {
 	cache := app.observations()
 	cache.mu.Lock()
 	history := cache.history[server.ID]
-	history[len(history)-1].endpointAt = time.Now().Add(-2 * time.Minute)
+	history[len(history)-1].endpoint.at = time.Now().Add(-2 * time.Minute)
 	cache.mu.Unlock()
 	app.collectLiveness(context.Background())
 	if got = serverStatusNow(app, server); got.Server.Endpoint != "203.0.113.42:7777" || serviceReads != 3 {

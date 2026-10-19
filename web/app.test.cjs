@@ -590,7 +590,7 @@ function refreshFixture(admin = false, extraCapabilities = {}) {
     fetch:(path,options)=>new Promise((resolve,reject)=>requests.push({path,options,resolve,reject})),
   });
   sandbox.history = {replaceState(_state, _title, hash){sandbox.location.hash = hash;}};
-  vm.runInContext(source.slice(0, source.indexOf("$('#refresh').innerHTML")) + '\nthis.ui = {state, applyAuth, refresh, handleChange, handleAction, logout, navigate, render, serverOverview, dashboardModel, selectTelemetry, parseLocationHash, selectedServer, applyRouteScope};', sandbox);
+  vm.runInContext(source.slice(0, source.indexOf("$('#refresh').innerHTML")) + '\nthis.ui = {state, applyAuth, refresh, handleChange, handleAction, logout, navigate, render, serverOverview, maintenance, dashboardModel, selectTelemetry, parseLocationHash, selectedServer, applyRouteScope};', sandbox);
   const ui = sandbox.ui;
   const auth = {mode:'oidc', authenticated:true, subject:'test', role:admin ? 'admin' : 'viewer', csrfToken:'session', capabilities:{dashboard:true,telemetry:true,logs:admin,...extraCapabilities}};
   ui.applyAuth(auth);
@@ -774,7 +774,9 @@ test('overview restores URL scope after auth reset, rejects late responses, and 
   f.ui.state.paused = true;
   f.advanceMonotonic(46000);
   for (const timer of [...f.timers.values()]) timer.fn();
-  assert.match(f.element('#content').innerHTML,/Connected players are stale/);
+  // The overview shows the neutral text; the Telemetry page keeps the detail.
+  assert.match(f.element('#content').innerHTML,/Connected players are unavailable\.<\/p>/);
+  assert.doesNotMatch(f.element('#content').innerHTML,/stale|Refresh telemetry/);
   assert.doesNotMatch(f.element('#content').innerHTML,/Alice|Mage/);
 });
 
@@ -960,6 +962,30 @@ test('a missing endpoint is pending or blank, never unavailable', () => {
   }
   f.ui.state.servers = [{id:'a', status:'online', endpoint:'10.0.0.8:7777', maxPlayers:4, metrics:{}}];
   assert.equal(f.ui.dashboardModel().rows[0].endpoint,'10.0.0.8:7777');
+});
+
+test('endpoint states render on dashboard rows, the overview and maintenance', () => {
+  const f = refreshFixture(false,{maintenance:true});
+  Object.assign(f.ui.state,{page:'servers', serverId:'a', telemetry:null});
+  for (const [name,server,want,absent] of [
+    ['resolved', {endpoint:'10.0.0.8:7777', endpointState:'resolved'}, '10.0.0.8:7777', /Endpoint pending|No external endpoint/],
+    ['pending', {endpoint:'', endpointState:'pending'}, 'Endpoint pending', /No external endpoint/],
+    ['none', {endpoint:'', endpointState:'none'}, 'No external endpoint', /Endpoint pending|Endpoint unavailable/],
+    ['not read yet', {endpoint:''}, 'Endpoint pending', /No external endpoint/],
+  ]) {
+    f.ui.state.servers = [{id:'a', status:'online', maxPlayers:4, metrics:{}, ...server}];
+    const row = f.ui.dashboardModel().rows[0];
+    assert.equal(row.endpoint,want,`${name} dashboard row`);
+    const overview = f.ui.serverOverview();
+    assert.ok(overview.includes(want),`${name} overview`);
+    assert.doesNotMatch(overview,absent,`${name} overview`);
+    assert.equal(overview.includes('data-testid="copy-endpoint"'),name === 'resolved',`${name} copy button`);
+    const maintenance = f.ui.maintenance();
+    assert.ok(maintenance.includes(want),`${name} maintenance`);
+    assert.doesNotMatch(maintenance,absent,`${name} maintenance`);
+  }
+  f.ui.state.servers = [{id:'a', status:'stopped', maxPlayers:4, metrics:{}, endpoint:'', endpointState:'none'}];
+  assert.equal(f.ui.dashboardModel().rows[0].endpoint,'');
 });
 
 test('the server overview reports status only and never shows collection failures', () => {

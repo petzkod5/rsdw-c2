@@ -232,10 +232,18 @@ func (c TelemetryConfig) retainedSamples() int {
 	return max(12, int(telemetryRetention/c.LivenessInterval))
 }
 
-// livenessBudget bounds one liveness pass: the Service lookup (up to two
-// reads), three discovery reads, one health probe and one identity re-check.
+// livenessBudget bounds the status work of one liveness pass: three discovery
+// reads, one health probe and one identity re-check. The Service lookup is not
+// part of it; it runs after the status is recorded, with its own bound
+// (endpointBudget) and cannot consume this one.
 func (c TelemetryConfig) livenessBudget() time.Duration {
-	return 6*c.KubeTimeout + c.HealthTimeout
+	return 4*c.KubeTimeout + c.HealthTimeout
+}
+
+// endpointBudget bounds the Service lookup of one liveness pass: the Service
+// read and, for a NodePort or LoadBalancer, the node list.
+func (c TelemetryConfig) endpointBudget() time.Duration {
+	return 2 * c.KubeTimeout
 }
 
 // metricsBudget bounds one metrics pass for the sources that are active: Pod
