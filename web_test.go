@@ -14,6 +14,7 @@ import (
 	"strings"
 	"testing"
 	"testing/fstest"
+	"unicode/utf8"
 )
 
 func TestEmbeddedIndexVersionsAssets(t *testing.T) {
@@ -21,7 +22,7 @@ func TestEmbeddedIndexVersionsAssets(t *testing.T) {
 	for _, target := range []string{"/", "/index.html", "/?refresh=1", "/./index.html"} {
 		res := httptest.NewRecorder()
 		app.ServeHTTP(res, httptest.NewRequest(http.MethodGet, target, nil))
-		if res.Code != http.StatusOK || res.Header().Get("Cache-Control") != "no-cache" || res.Header().Get("ETag") == "" || res.Header().Get("Last-Modified") == "" {
+		if res.Code != http.StatusOK || res.Header().Get("Cache-Control") != "no-cache" || res.Header().Get("ETag") == "" || res.Header().Get("Last-Modified") != "" {
 			t.Fatalf("%s: status=%d headers=%v", target, res.Code, res.Header())
 		}
 		for _, name := range []string{"app.js", "styles.css"} {
@@ -138,9 +139,9 @@ func TestWebConditionalRequests(t *testing.T) {
 		if again.Code != http.StatusNotModified || again.Body.Len() != 0 || again.Header().Get("ETag") != first.Header().Get("ETag") {
 			t.Fatalf("%s: If-None-Match status=%d body=%d", target, again.Code, again.Body.Len())
 		}
-		modified := serveWeb(app, target, map[string]string{"If-Modified-Since": first.Header().Get("Last-Modified")})
-		if modified.Code != http.StatusNotModified {
-			t.Fatalf("%s: If-Modified-Since status=%d", target, modified.Code)
+		// Validation is by ETag only: the embedded FS has no modification time to advertise.
+		if first.Header().Get("Last-Modified") != "" {
+			t.Fatalf("%s: unexpected Last-Modified %q", target, first.Header().Get("Last-Modified"))
 		}
 		stale := serveWeb(app, target, map[string]string{"If-None-Match": `"stale"`})
 		if stale.Code != http.StatusOK {
@@ -296,5 +297,23 @@ func TestWebHandlerRejectsOtherRequests(t *testing.T) {
 	app.ServeHTTP(res, httptest.NewRequest(http.MethodGet, "/api/auth", nil))
 	if res.Header().Get("Cache-Control") != "no-store" || res.Header().Get("ETag") != "" || res.Header().Get("Content-Encoding") != "" {
 		t.Fatalf("/api/auth headers=%v", res.Header())
+	}
+}
+
+// A lossy re-encode once left U+FFFD in the boot shell ("Connecting" followed by a replacement character).
+// Embedded text must be valid UTF-8 and free of replacement characters.
+func TestEmbeddedTextAssetsHaveNoReplacementCharacters(t *testing.T) {
+	for _, name := range []string{"index.html", "app.js", "styles.css"} {
+		body, err := webFiles.ReadFile("web/" + name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !utf8.Valid(body) {
+			t.Fatalf("%s is not valid UTF-8", name)
+		}
+		if i := bytes.IndexRune(body, utf8.RuneError); i >= 0 {
+			line := 1 + bytes.Count(body[:i], []byte("\n"))
+			t.Fatalf("%s line %d contains U+FFFD", name, line)
+		}
 	}
 }
