@@ -418,7 +418,7 @@ func (s *Store) Update(fn func(*State) error) error {
 		s.writeErr = fmt.Errorf("state replacement durability is uncertain; restart C2 to reload state: %w", err)
 		return s.writeErr
 	}
-	err = directory.Sync()
+	err = syncDirectoryHandle(directory)
 	directory.Close()
 	if err != nil {
 		s.writeErr = fmt.Errorf("state replacement durability is uncertain; restart C2 to reload state: %w", err)

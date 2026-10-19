@@ -625,7 +625,7 @@ func TestSaveStagingRejectsSymlinksAndKeepsAtomicFiles(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !bytes.Equal(data, saveFixture) || info.Mode().Perm() != 0o600 {
+	if !bytes.Equal(data, saveFixture) || (hasPOSIXPermissions() && info.Mode().Perm() != 0o600) {
 		t.Fatal("incorrect staged bytes or mode")
 	}
 	if _, err := root.Stat("fixture.sav.tmp"); !errors.Is(err, os.ErrNotExist) {

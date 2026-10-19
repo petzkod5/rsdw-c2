@@ -21,7 +21,8 @@ const handled = [...fs.readFileSync('web/app.js', 'utf8').matchAll(/case '([^']+
 const missing = [...new Set(rendered)].filter((action) => !handled.includes(action));
 if (missing.length) throw new Error(`Unhandled UI actions: ${missing.join(', ')}`);
 NODE
-go build -o .tmp/rsdw-c2 .
+server_bin=.tmp/rsdw-c2$(go env GOEXE)
+go build -o "$server_bin" .
 node tests/users-browser.cjs
 node tests/deletion-browser.cjs
 node tests/dashboard-browser.cjs
@@ -88,7 +89,7 @@ if grep -q 'number: 8080' /tmp/rsdw-c2-port-manifest.yaml; then
 fi
 
 test_dir=$(mktemp -d -t rsdw-c2-verify.XXXXXX)
-RSDW_DEMO_DATA=true RSDW_STATE_FILE="$test_dir/state.json" RSDW_LISTEN_ADDR="127.0.0.1:0" .tmp/rsdw-c2 >"$test_dir/server.log" 2>&1 &
+RSDW_DEMO_DATA=true RSDW_STATE_FILE="$test_dir/state.json" RSDW_LISTEN_ADDR="127.0.0.1:0" "$server_bin" >"$test_dir/server.log" 2>&1 &
 pid=$!
 cleanup() { kill "$pid" 2>/dev/null || true; wait "$pid" 2>/dev/null || true; }
 trap cleanup EXIT

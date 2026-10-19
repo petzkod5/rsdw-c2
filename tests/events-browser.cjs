@@ -4,13 +4,14 @@ const path = require('node:path');
 const {spawn} = require('node:child_process');
 const {once} = require('node:events');
 const {chromium} = require('playwright');
+const {serverBinary} = require('./fixture-processes.cjs');
 
 const root = path.resolve(__dirname, '..');
 fs.mkdirSync(path.join(root, '.tmp'), {recursive:true});
 const output = fs.mkdtempSync(path.join(root, '.tmp/events-browser-'));
 const stateFile = path.join(output, 'state.json');
 const token = 'events-browser-test-token';
-const server = spawn(path.join(root, '.tmp/rsdw-c2'), [], {
+const server = spawn(serverBinary(root), [], {
   cwd:root,
   env:{...process.env, RSDW_AUTH_MODE:'token', RSDW_DEMO_DATA:'true', RSDW_ADMIN_TOKEN:token, RSDW_STATE_FILE:stateFile, RSDW_LISTEN_ADDR:'127.0.0.1:0'},
   stdio:['ignore','pipe','pipe'],

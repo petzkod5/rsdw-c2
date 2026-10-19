@@ -157,6 +157,9 @@ func TestBackupStorageDetectsLostOrCorruptRepository(t *testing.T) {
 					t.Fatal(err)
 				}
 			case "unwritable":
+				if !hasPOSIXPermissions() {
+					t.Skip("Windows ignores directory mode bits")
+				}
 				staging := filepath.Join(repository.root, ".staging")
 				if err := os.Chmod(staging, 0500); err != nil {
 					t.Fatal(err)
