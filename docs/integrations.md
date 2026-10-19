@@ -97,7 +97,7 @@ Save templates with the other integration fields on `POST /api/integrations` or 
 }
 ```
 
-A `PUT` whose body has no `messages` or `serverMessages` key keeps the stored templates, so clients that do not edit them never erase them. Send `{}` to clear one.
+A `PUT` whose body has no `messages` or `serverMessages` key keeps the stored templates, so clients that do not edit them never erase them. Send `{}` to clear one. `POST` and `PUT` respond with the stored integration (customizations only); read `GET /api/integrations` for the effective templates.
 
 `GET /api/integrations` returns each integration's stored `messages` and `serverMessages` (customizations only) plus the effective templates. An editor can show where each value comes from and offer "reset to default":
 

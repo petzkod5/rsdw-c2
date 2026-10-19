@@ -416,7 +416,7 @@ func (a *App) handleIntegrations(w http.ResponseWriter, r *http.Request) {
 	if collection {
 		status = http.StatusCreated
 	}
-	writeJSON(w, status, newIntegrationView(input))
+	writeJSON(w, status, input)
 }
 
 func deliveryEnabled(i DiscordIntegration, d Delivery) bool {

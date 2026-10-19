@@ -428,9 +428,9 @@ func TestIntegrationAPIMessages(t *testing.T) {
 	if res.Code != 201 {
 		t.Fatal(res.Code, res.Body.String())
 	}
-	created := decodeBody[integrationView](t, res.Body.String())
-	if created.EffectiveMessages[RestartCompleted].Source != messageSourceIntegration || created.EffectiveMessages[ServerDown].Source != messageSourceDefault {
-		t.Fatalf("effective = %+v", created.EffectiveMessages)
+	created := decodeBody[DiscordIntegration](t, res.Body.String())
+	if !reflect.DeepEqual(created, app.store.Snapshot().Integrations[created.ID]) {
+		t.Fatalf("response differs from the stored integration: %+v", created)
 	}
 	stored := app.store.Snapshot().Integrations[created.ID]
 	if len(stored.Messages) != 1 || stored.Messages[RestartCompleted].Title != "Back!" || len(stored.ServerMessages["scuffedtards"]) != 1 {
