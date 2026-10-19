@@ -42,7 +42,7 @@ type discordMessageSpec struct {
 	Color       int
 	Server      bool
 	// Variants replace the built-in title and description when the event carries evidence that makes a more
-	// specific message possible. They apply only while no customized template is in effect.
+	// specific message possible. They apply unless a template changes the built-in title or description.
 	Variants []discordMessageVariant
 }
 
@@ -96,7 +96,9 @@ func renderDiscordEmbed(event Event, tmpl *MessageTemplate) (discordEmbed, error
 		return discordEmbed{}, errUnsupportedDiscordMessage
 	}
 	title, description, color := spec.Title, spec.Description, spec.Color
-	if tmpl == nil {
+	// A template that keeps the built-in title and description (a color-only customization) still gets the
+	// evidence variant. Only a template that changes the text replaces it.
+	if tmpl == nil || (tmpl.Title == spec.Title && tmpl.Description == spec.Description) {
 		for _, variant := range spec.Variants {
 			if variant.Match(event) {
 				title, description = variant.Title, variant.Description
@@ -105,9 +107,9 @@ func renderDiscordEmbed(event Event, tmpl *MessageTemplate) (discordEmbed, error
 		}
 	} else {
 		title, description = tmpl.Title, tmpl.Description
-		if tmpl.Color != nil {
-			color = *tmpl.Color
-		}
+	}
+	if tmpl != nil && tmpl.Color != nil {
+		color = *tmpl.Color
 	}
 	values := messageVariableValues(event)
 	embed := discordEmbed{Title: expandTemplate(title, values), Description: expandTemplate(description, values), Color: color, Footer: discordEmbedFooter{Text: "Dragonwilds C2"}}

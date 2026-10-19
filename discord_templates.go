@@ -89,7 +89,6 @@ var messageVariableCatalogue = []messageVariable{
 	{"warningMinutes", "Minutes between the warning and the restart", "5"},
 	{"image", "Server image the event was raised against", "ghcr.io/petzkod5/rsdragonwilds-server:v1.2.3"},
 	{"imageTag", "Tag of that image", "v1.2.3"},
-	{"operator", "Admin who triggered the event, when C2 recorded one (test messages)", "admin"},
 }
 
 func messageVariableByName(name string) (messageVariable, bool) {
@@ -107,7 +106,8 @@ func messageKindVariables(kind EventKind) []messageVariable {
 	names := []string{"event", "time"}
 	switch kind {
 	case IntegrationTest:
-		names = append(names, "operator")
+		// Only a test sent for a server fills these; the plain integration test has no server.
+		names = append(names, "server", "image", "imageTag")
 	case RestartWarning:
 		names = append(names, "server", "scheduledTime", "warningMinutes", "image", "imageTag")
 	case PlayerJoined:
@@ -150,7 +150,7 @@ func messageVariableValues(event Event) map[string]string {
 		}
 	}
 	if event.ServerName != "" {
-		values["server"] = event.ServerName
+		values["server"] = escapeDiscordText(event.ServerName)
 	}
 	if !event.Timestamp.IsZero() {
 		values["time"] = event.Timestamp.UTC().Format(time.RFC3339)
@@ -164,11 +164,13 @@ func messageVariableValues(event Event) map[string]string {
 	if joined := event.Evidence.JoinedPlayers; len(joined) > 0 {
 		var accounts, characters, both []string
 		for _, player := range joined {
-			characters = append(characters, player.CharacterName)
-			entry := player.CharacterName
+			character := escapeDiscordText(player.CharacterName)
+			characters = append(characters, character)
+			entry := character
 			if player.Name != "" {
-				accounts = append(accounts, player.Name)
-				entry += " (" + player.Name + ")"
+				account := escapeDiscordText(player.Name)
+				accounts = append(accounts, account)
+				entry += " (" + account + ")"
 			}
 			both = append(both, entry)
 		}
@@ -182,16 +184,26 @@ func messageVariableValues(event Event) map[string]string {
 		values["warningMinutes"] = strconv.Itoa(warning.Minutes)
 	}
 	if event.Image != "" {
-		values["image"] = event.Image
+		values["image"] = escapeDiscordText(event.Image)
 		if tag := imageTagOf(event.Image); tag != "" {
-			values["imageTag"] = tag
+			values["imageTag"] = escapeDiscordText(tag)
 		}
-	}
-	if event.Actor != "" {
-		values["operator"] = event.Actor
 	}
 	return values
 }
+
+// discordMarkdownEscaper neutralises Discord markdown and mention syntax in text that comes from outside C2.
+// Markdown punctuation gets a backslash. A zero-width space after "@" and "<" stops @everyone, @here, <@id>,
+// <@&role>, <#channel>, <:emoji:id>, <t:stamp>, and <autolink> from being parsed. allowed_mentions already
+// suppresses pings, so this keeps the embed from rendering them as live.
+var discordMarkdownEscaper = strings.NewReplacer(
+	`\`, `\\`, "*", `\*`, "_", `\_`, "~", `\~`, "|", `\|`, "`", "\\`", ">", `\>`, "#", `\#`, "-", `\-`,
+	"[", `\[`, "]", `\]`, "(", `\(`, ")", `\)`, "@", "@​", "<", "<​",
+)
+
+// escapeDiscordText makes a player, character, server, or image name safe to place in an embed. Values that C2
+// produces itself (times, counts, event labels) are not escaped.
+func escapeDiscordText(text string) string { return discordMarkdownEscaper.Replace(text) }
 
 // imageTagOf returns the tag of "registry[:port]/repo:tag[@digest]".
 func imageTagOf(image string) string {
@@ -259,26 +271,32 @@ func messageFieldError(field, format string, args ...any) error {
 }
 
 func validateMessageTemplate(field string, kind EventKind, tmpl MessageTemplate) error {
+	if strings.TrimSpace(tmpl.Title) == "" && strings.TrimSpace(tmpl.Description) == "" {
+		return messageFieldError(field+".title", "%s needs a title or a description", kind)
+	}
 	for _, part := range []struct {
 		name, text string
 		limit      int
 		singleLine bool
 	}{{"title", tmpl.Title, discordTitleLimit, true}, {"description", tmpl.Description, discordDescriptionLimit, false}} {
 		path := field + "." + part.name
-		if length := utf8.RuneCountInString(part.text); length > part.limit {
+		// Text is stored trimmed, so limits and emptiness are judged on the trimmed text.
+		text := strings.TrimSpace(part.text)
+		if part.text != "" && text == "" {
+			return messageFieldError(path, "%s for %s must not be only whitespace", part.name, kind)
+		}
+		if length := utf8.RuneCountInString(text); length > part.limit {
 			return messageFieldError(path, "%s for %s is %d characters; Discord allows %d", part.name, kind, length, part.limit)
 		}
-		if strings.ContainsRune(part.text, 0) || (part.singleLine && strings.ContainsAny(part.text, "\r\n")) {
+		if strings.ContainsRune(text, 0) || (part.singleLine && strings.ContainsAny(text, "\r\n")) {
 			return messageFieldError(path, "%s for %s must not contain NUL or, for the title, line breaks", part.name, kind)
 		}
-		if name, unknown := unknownPlaceholder(part.text); unknown {
+		if name, unknown := unknownPlaceholder(text); unknown {
 			return messageFieldError(path, "unknown variable {{%s}} in the %s of %s", name, part.name, kind)
 		}
 	}
-	if strings.TrimSpace(tmpl.Title) == "" && strings.TrimSpace(tmpl.Description) == "" {
-		return messageFieldError(field+".title", "%s needs a title or a description", kind)
-	}
-	if utf8.RuneCountInString(tmpl.Title)+utf8.RuneCountInString(tmpl.Description) > discordEmbedTotalLimit {
+	// Each part is within its own limit above, so this guards the Discord embed total should the limits change.
+	if utf8.RuneCountInString(strings.TrimSpace(tmpl.Title))+utf8.RuneCountInString(strings.TrimSpace(tmpl.Description)) > discordEmbedTotalLimit {
 		return messageFieldError(field, "title and description for %s exceed Discord's %d character embed limit", kind, discordEmbedTotalLimit)
 	}
 	if tmpl.Color != nil && (*tmpl.Color < 0 || *tmpl.Color > discordColorMax) {
@@ -342,6 +360,7 @@ func (i *DiscordIntegration) normalizeMessages() {
 		out := map[EventKind]MessageTemplate{}
 		for kind, tmpl := range messages {
 			tmpl = tmpl.clone()
+			tmpl.Title, tmpl.Description = strings.TrimSpace(tmpl.Title), strings.TrimSpace(tmpl.Description)
 			if tmpl.Color == nil {
 				color := defaultMessageTemplate(kind).Color
 				tmpl.Color = color

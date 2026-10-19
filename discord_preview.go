@@ -16,8 +16,8 @@ const (
 
 // sampleMessageEvent builds the representative event used by previews and kind-specific tests. It carries the
 // evidence a real event of the kind would, so every variable the kind supports has a value.
-func sampleMessageEvent(kind EventKind, server *Server, actor string, now time.Time) Event {
-	event := Event{ID: randomID(), Timestamp: now.UTC(), Kind: kind, Message: "Sample " + string(kind), Source: "C2 operator", Accuracy: "observed", Actor: actor}
+func sampleMessageEvent(kind EventKind, server *Server, now time.Time) Event {
+	event := Event{ID: randomID(), Timestamp: now.UTC(), Kind: kind, Message: "Sample " + string(kind), Source: "C2 operator", Accuracy: "observed"}
 	maxPlayers := 10
 	if kind != IntegrationTest || server != nil {
 		event.ServerName, event.Image = sampleServerName, sampleImage
@@ -45,12 +45,19 @@ func sampleMessageEvent(kind EventKind, server *Server, actor string, now time.T
 	return event
 }
 
-// decodeOptionalBody reads a JSON object body that may be empty.
+// decodeOptionalBody reads one JSON object body that may be empty. Data after the object is an error, as it is
+// for create and update.
 func decodeOptionalBody(w http.ResponseWriter, r *http.Request, into any) error {
 	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, integrationBodyLimit))
 	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(into); err != nil && err != io.EOF {
+	if err := decoder.Decode(into); err != nil {
+		if err == io.EOF {
+			return nil
+		}
 		return err
+	}
+	if decoder.Decode(new(any)) != io.EOF {
+		return errors.New("unexpected data after the JSON body")
 	}
 	return nil
 }
@@ -110,7 +117,7 @@ func (a *App) handleIntegrationTest(w http.ResponseWriter, r *http.Request, id s
 			status = http.StatusBadRequest
 			return messageFieldError("kind", "webhook integrations only support the integration test message")
 		}
-		event := sampleMessageEvent(request.Kind, target.server, requestPrincipal(r).Subject, time.Now().UTC())
+		event := sampleMessageEvent(request.Kind, target.server, time.Now().UTC())
 		if request.Kind == IntegrationTest {
 			event.Message = "Integration test"
 		}
@@ -176,7 +183,7 @@ func (a *App) handleMessagePreview(w http.ResponseWriter, r *http.Request, id st
 	}
 	candidate.normalizeMessages()
 	effective := candidate.resolveMessage(request.ServerID, request.Kind)
-	event := sampleMessageEvent(request.Kind, target.server, requestPrincipal(r).Subject, time.Now().UTC())
+	event := sampleMessageEvent(request.Kind, target.server, time.Now().UTC())
 	var template *MessageTemplate
 	if effective.Source != messageSourceDefault {
 		template = &effective.MessageTemplate

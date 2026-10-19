@@ -68,7 +68,7 @@ func TestMessageResolutionOrder(t *testing.T) {
 
 func TestMessageVariablesRenderEveryVariable(t *testing.T) {
 	at := time.Date(2026, 1, 1, 7, 0, 0, 0, time.FixedZone("EST", -5*60*60))
-	full := Event{Kind: PlayerJoined, ServerName: "Example server", Timestamp: at, Image: "registry.example:5000/dragonwilds/server:v1.2.3", Actor: "admin",
+	full := Event{Kind: PlayerJoined, ServerName: "Example server", Timestamp: at, Image: "registry.example:5000/dragonwilds/server:v1.2.3",
 		Evidence: AlertEvidence{
 			PlayerCount:    &PlayerCountEvidence{Available: true, Players: 3, MaxPlayers: 10},
 			JoinedPlayers:  []ConnectedPlayer{{Name: "Sam", CharacterName: "Brynn"}, {Name: "", CharacterName: "Tor"}},
@@ -91,7 +91,6 @@ func TestMessageVariablesRenderEveryVariable(t *testing.T) {
 		{"warningMinutes", "warningMinutes", full, "5"},
 		{"image", "image", full, "registry.example:5000/dragonwilds/server:v1.2.3"},
 		{"imageTag", "imageTag", full, "v1.2.3"},
-		{"operator", "operator", full, "admin"},
 		{"spaces", " server ", full, "Example server"},
 		{"missing server", "server", Event{Kind: ServerDown}, "Unknown server"},
 		{"missing time", "time", Event{Kind: ServerDown}, "unavailable"},
@@ -109,7 +108,6 @@ func TestMessageVariablesRenderEveryVariable(t *testing.T) {
 		{"missing tag", "imageTag", Event{Kind: ServerDown}, "unavailable"},
 		{"untagged image", "imageTag", Event{Kind: ServerDown, Image: "registry.example:5000/server"}, "unavailable"},
 		{"digest image", "imageTag", Event{Kind: ServerDown, Image: "registry.example/server:v2@sha256:abc"}, "v2"},
-		{"missing operator", "operator", Event{Kind: ServerDown}, "unavailable"},
 	}
 	covered := map[string]bool{}
 	for _, tc := range cases {
@@ -295,7 +293,7 @@ func TestMessageValidation(t *testing.T) {
 		})
 	}
 	valid := templateIntegration()
-	valid.Messages = map[EventKind]MessageTemplate{ServerDown: templateFixture(long(256), long(4096), 0xFFFFFF), IntegrationTest: templateFixture("{{event}} {{ server }}", "multi\nline {{operator}}", 0)}
+	valid.Messages = map[EventKind]MessageTemplate{ServerDown: templateFixture(long(256), long(4096), 0xFFFFFF), IntegrationTest: templateFixture("{{event}} {{ server }}", "multi\nline {{event}}", 0)}
 	valid.ServerMessages = map[string]map[EventKind]MessageTemplate{"other": {RestartWarning: templateFixture("a", "{{warningMinutes}} {{scheduledTime}}", 7)}}
 	if err := validateIntegrationMessages(valid); err != nil {
 		t.Fatal(err)
@@ -479,7 +477,7 @@ func TestIntegrationAPIMessages(t *testing.T) {
 		}
 		return out
 	}
-	if !reflect.DeepEqual(names(RestartWarning), []string{"event", "server", "time", "scheduledTime", "warningMinutes", "image", "imageTag"}) || !reflect.DeepEqual(names(IntegrationTest), []string{"event", "time", "operator"}) {
+	if !reflect.DeepEqual(names(RestartWarning), []string{"event", "server", "time", "scheduledTime", "warningMinutes", "image", "imageTag"}) || !reflect.DeepEqual(names(IntegrationTest), []string{"event", "server", "time", "image", "imageTag"}) {
 		t.Fatalf("variables = %v / %v", names(RestartWarning), names(IntegrationTest))
 	}
 
@@ -614,8 +612,8 @@ func TestMessagePreview(t *testing.T) {
 	if !strings.HasPrefix(got.Embed.Description, "Restart in 5 minutes.") {
 		t.Fatalf("warning preview = %+v", got)
 	}
-	got = preview(`{"kind":"integration_test","messages":{"integration_test":{"title":"{{operator}} {{server}}","description":"d"}}}`)
-	if got.Embed.Title != operatorText(got.SampleEvent)+" Unknown server" || len(got.Embed.Fields) != 0 {
+	got = preview(`{"kind":"integration_test","messages":{"integration_test":{"title":"{{event}} {{server}}","description":"d"}}}`)
+	if got.Embed.Title != "Integration test Unknown server" || len(got.Embed.Fields) != 0 {
 		t.Fatalf("integration test preview = %+v", got)
 	}
 
@@ -667,7 +665,7 @@ func TestIntegrationTestUsesSavedTemplatesAndKind(t *testing.T) {
 	app := newTestApp(t, true)
 	saved := createTemplateIntegration(t, app, func(i *DiscordIntegration) {
 		i.Messages = map[EventKind]MessageTemplate{
-			IntegrationTest:  templateFixture("Custom test", "from {{operator}}", 0x0A0B0C),
+			IntegrationTest:  templateFixture("Custom test", "from {{event}}", 0x0A0B0C),
 			RestartCompleted: templateFixture("Integration {{server}}", "int body", 0x111111),
 			ServerStopped:    {Title: "Never", Description: "off", Color: intPtr(1), Enabled: boolPtr(false)},
 		}
@@ -694,7 +692,7 @@ func TestIntegrationTestUsesSavedTemplatesAndKind(t *testing.T) {
 	}
 
 	d := send(``)
-	if embed := embedOf(d); d.Event.Kind != IntegrationTest || !d.Test || embed.Title != "Custom test" || embed.Description != "from "+operatorText(d.Event) || embed.Color != 0x0A0B0C || len(embed.Fields) != 0 {
+	if embed := embedOf(d); d.Event.Kind != IntegrationTest || !d.Test || embed.Title != "Custom test" || embed.Description != "from Integration test" || embed.Color != 0x0A0B0C || len(embed.Fields) != 0 {
 		t.Fatalf("default test = %+v / %+v", d, embed)
 	}
 	d = send(`{}`)
@@ -857,13 +855,6 @@ func TestDeliveryKeepsTemplateInEffectWhenCreated(t *testing.T) {
 	if got := *app.store.Snapshot().Deliveries[d.ID].Template.Color; got != 0xAAAAAA {
 		t.Fatalf("template shared with snapshot: %x", got)
 	}
-}
-
-func operatorText(event Event) string {
-	if event.Actor == "" {
-		return unavailableText
-	}
-	return event.Actor
 }
 
 func deliveriesOf(s State) []Delivery {

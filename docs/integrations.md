@@ -14,7 +14,7 @@ In Integrations, open **Discord**. The card shows Not connected, Connected, or D
 
 Use **Configure** to change server associations, rules, enabled state, or the Secret reference. Updating the referenced Secret also rotates the token because each attempt reads it again. The bot verifies that the channel belongs to the configured guild before sending. **Send test** queues a test even when automatic alerts are disabled. Recent messages lists each delivery with the Dragonwilds server it belongs to.
 
-The **HTTPS webhooks** page accepts a public HTTPS endpoint on port 443. The URL cannot contain credentials, a query, or a fragment. C2 sends the referenced Secret as a bearer token, refuses redirects, and rejects DNS results that point at private or special-use address ranges. Webhook payloads are versioned JSON records with the delivery ID and immutable event evidence. Webhooks use the same queue and delivery states as Discord, but their retry responses do not pause Discord deliveries.
+The **HTTPS webhooks** page accepts a public HTTPS endpoint on port 443. The URL cannot contain credentials, a query, or a fragment. C2 sends the referenced Secret as a bearer token, refuses redirects, and rejects DNS results that point at private or special-use address ranges. Webhook payloads are versioned JSON records with the delivery ID and immutable event evidence. The `event` object includes `image`, the server image (current, otherwise desired) when the event was raised; it is omitted when the server had none. Webhooks use the same queue and delivery states as Discord, but their retry responses do not pause Discord deliveries.
 
 Each integration can set quiet hours with an IANA timezone. C2 evaluates the event time in that stored timezone when it creates a delivery. Suppressed events remain in event history but do not enter the queue, and changing quiet hours does not replay them. Test deliveries bypass quiet hours.
 
@@ -42,9 +42,9 @@ A message resolves in this order, and the first match wins:
 
 `enabled: false` suppresses new messages of that kind: no delivery is queued, although the event still appears in event history. At server level it silences one server. At integration level it silences every server that has no override of its own. Test messages ignore `enabled`, rules, and quiet hours.
 
-C2 stores only real customizations. On save it drops an integration entry that equals the built-in default, and a server entry that equals what it would fall back to (the integration's effective template). An omitted `color` means the built-in color. A server entry that equals the built-in default is kept when the integration customizes that kind, because it restores the default for that server. A stored integration without `messages` uses the defaults, so existing state needs no migration.
+C2 stores only real customizations. On save it drops an integration entry that equals the built-in default, and a server entry that equals what it would fall back to (the integration's effective template). A server override that equals the integration template is therefore normalised away and does not come back from `GET`; if the integration template changes later, that server follows it. An omitted `color` means the built-in color. A server entry that equals the built-in default is kept when the integration customizes that kind, because it restores the default for that server. A stored integration without `messages` uses the defaults, so existing state needs no migration.
 
-Two kinds have an evidence-based default variant that applies only while no customized template is in effect. `player_joined` becomes "Player joined / `{{joinedPlayers}}` joined the server." when a fresh roster names the players. `restart_warning` becomes "Restart in `{{warningMinutes}}` minutes. Save your progress. Scheduled for `{{scheduledTime}}`." when the event has restart evidence. `messageDefaults` lists them under `variants`. A customized template replaces both.
+Two kinds have an evidence-based default variant. `player_joined` becomes "Player joined / `{{joinedPlayers}}` joined the server." when a fresh roster names the players. `restart_warning` becomes "Restart in `{{warningMinutes}}` minutes. Save your progress. Scheduled for `{{scheduledTime}}`." when the event has restart evidence. `messageDefaults` lists them under `variants`. A template whose title and description both equal the built-in text, that is, one that changes only `color` or `enabled`, keeps the variant and applies just the color and enabled flag. A template that changes the title or the description replaces the variant text. Write the text yourself (for example `{{joinedPlayers}}`) to keep roster names in a customized message.
 
 ### Variables
 
@@ -54,18 +54,19 @@ Write `{{name}}` in a title or description. Spaces inside the braces are ignored
 | --- | --- | --- |
 | `{{event}}` | Label of the event kind, such as "Restart completed" | all kinds |
 | `{{time}}` | Event time in UTC, RFC 3339 | all kinds |
-| `{{server}}` | Server name | all kinds except `integration_test` |
-| `{{image}}`, `{{imageTag}}` | Server image the event was raised against, and its tag | all kinds except `integration_test` |
+| `{{server}}` | Server name | all kinds; for `integration_test` only a test sent with a `serverId` |
+| `{{image}}`, `{{imageTag}}` | Server image the event was raised against, and its tag | all kinds; for `integration_test` only a test sent with a `serverId` |
 | `{{players}}`, `{{maxPlayers}}` | Fresh player count and the configured limit. `{{players}}` is `unavailable` when the count was not fresh. | `player_joined`, `server_recovered` |
 | `{{player}}`, `{{character}}`, `{{joinedPlayers}}` | Account names, character names, and "Character (Account)" entries of the players who joined, comma separated | `player_joined` when the roster names them |
 | `{{scheduledTime}}`, `{{warningMinutes}}` | Restart instant in UTC and minutes of notice | `restart_warning` |
-| `{{operator}}` | Admin who sent the message | `integration_test`, and test messages of any kind |
 
-Other events do not record an operator yet, so `{{operator}}` is `unavailable` for them.
+There is no operator variable. Events do not record an admin display name, and the account identifier is an operational ID that Discord text excludes.
+
+Values that come from outside C2 are escaped before they are inserted: `{{server}}`, `{{player}}`, `{{character}}`, `{{joinedPlayers}}`, `{{image}}`, and `{{imageTag}}`. A server or player can be named anything, so C2 puts a backslash before the Discord markdown characters `` \ * _ ~ | ` > # - [ ] ( ) `` and a zero-width space after `@` and `<`. A name such as `@everyone`, `<@123>`, `<@&role>`, `**bold**`, or `[text](https://evil.example)` therefore shows as plain text in the embed. The same escaping applies to the Server field and to the built-in roster text of a player-joined message. The message still disables all mentions. A plain URL typed as a name is not a markdown link, but Discord may still link it. Times, counts, and the event label come from C2 and are not escaped.
 
 ### Limits
 
-Saving or previewing rejects a title over 256 characters, a description over 4096, a color outside `0` to `16777215` (`0xFFFFFF`), a message with neither title nor description, a title with line breaks, and NUL characters. `messageLimits` returns the limits. Variables can make the rendered text longer than the template, so C2 also truncates the rendered title (256), description (4096), field values (1024), and the whole embed (6000 characters) with an ellipsis before sending.
+Saving or previewing rejects a title over 256 characters, a description over 4096, a color outside `0` to `16777215` (`0xFFFFFF`), a message with neither title nor description, a title or description that is only whitespace, a title with line breaks, and NUL characters. Lengths are counted after trimming, and C2 stores the trimmed title and description. Title and description are each limited, so together they stay under the 6000 character embed total. `messageLimits` returns the limits. Variables can make the rendered text longer than the template, so C2 also truncates the rendered title (256), description (4096), field values (1024), and the whole embed (6000 characters) with an ellipsis before sending.
 
 Validation failures return HTTP 400 with `error` and `fields`, like other integration errors. Template field keys are dotted paths, and the message names the event kind and variable:
 
@@ -76,7 +77,7 @@ Validation failures return HTTP 400 with `error` and `fields`, like other integr
 }
 ```
 
-Other keys are `messages.<kind>`, `messages.<kind>.title`, `messages.<kind>.color`, and `serverMessages.<serverId>[.<kind>[.title|description|color]]`. A kind is valid when it has a Discord message, which includes the unavailable backup kinds and `integration_test`; other kinds are rejected. Per-server overrides are accepted only for servers associated with the integration, so remove overrides before removing a server association. Deleting a server removes its overrides.
+Other keys are `messages.<kind>`, `messages.<kind>.title`, `messages.<kind>.color`, and `serverMessages.<serverId>[.<kind>[.title|description|color]]`. A kind is valid when it has a Discord message, which includes the unavailable backup kinds and `integration_test`; other kinds are rejected. Per-server overrides are accepted only for servers associated with the integration, so a request that sends `serverMessages` cannot include a server it removes from `serverIds`. A request without a `serverMessages` key drops the stored overrides of servers it removes, so the console form can untick a server that has one. Deleting a server removes its overrides.
 
 ### API bodies
 
@@ -97,7 +98,7 @@ Save templates with the other integration fields on `POST /api/integrations` or 
 }
 ```
 
-A `PUT` whose body has no `messages` or `serverMessages` key keeps the stored templates, so clients that do not edit them never erase them. Send `{}` to clear one. `POST` and `PUT` respond with the stored integration (customizations only); read `GET /api/integrations` for the effective templates.
+A `PUT` whose body has no `messages` or `serverMessages` key keeps the stored templates, so clients that do not edit them never erase them. Without `serverMessages`, overrides of servers the request removes from `serverIds` are dropped. Send `{}` to clear one. `POST` and `PUT` respond with the stored integration (customizations only); read `GET /api/integrations` for the effective templates.
 
 `GET /api/integrations` returns each integration's stored `messages` and `serverMessages` (customizations only) plus the effective templates. An editor can show where each value comes from and offer "reset to default":
 

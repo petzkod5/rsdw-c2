@@ -382,8 +382,17 @@ func (a *App) handleIntegrations(w http.ResponseWriter, r *http.Request) {
 			if input.Messages == nil {
 				input.Messages = existing.Messages
 			}
+			// Overrides for servers the request removes go with the association, so the legacy form can untick a
+			// server that has one. Overrides the request itself sends are still validated.
 			if input.ServerMessages == nil {
-				input.ServerMessages = existing.ServerMessages
+				for id, set := range existing.ServerMessages {
+					if slices.Contains(input.ServerIDs, id) {
+						if input.ServerMessages == nil {
+							input.ServerMessages = map[string]map[EventKind]MessageTemplate{}
+						}
+						input.ServerMessages[id] = set
+					}
+				}
 			}
 		}
 		if err := validateIntegration(input, *state); err != nil {
