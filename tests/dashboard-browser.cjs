@@ -119,7 +119,9 @@ async function run() {
     const failedMetrics = ['players','tickRate','memoryUsedBytes','memoryLimitBytes','cpuPercent','diskPercent','networkBytesPerSecond'];
     servers.push(
       {id:'quiet',worldName:'Quiet Glade',status:'online',maxPlayers:8,endpoint:'',updateAvailable:false,metricsAvailable:false,metrics:Object.fromEntries(failedMetrics.map(key => failed(key,key === 'tickRate' ? 'unsupported' : key === 'diskPercent' ? 'stale' : 'error')))},
-      {id:'lost',worldName:'Lost Hollow',status:'unknown',maxPlayers:8,endpoint:'10.20.0.31:7777',updateAvailable:false,metricsAvailable:false,metrics:Object.fromEntries(failedMetrics.map(key => failed(key,'unavailable')))},
+      {id:'lost',worldName:'Lost Hollow',status:'unknown',maxPlayers:8,endpoint:'10.20.0.31:7777',endpointState:'resolved',updateAvailable:false,metricsAvailable:false,metrics:Object.fromEntries(failedMetrics.map(key => failed(key,'unavailable')))},
+      {id:'internal',worldName:'Internal Keep',status:'online',maxPlayers:8,endpoint:'',endpointState:'none',updateAvailable:false,metricsAvailable:false,metrics:Object.fromEntries(failedMetrics.map(key => failed(key,'error')))},
+      {id:'waiting',worldName:'Waiting Wharf',status:'online',maxPlayers:8,endpoint:'',endpointState:'pending',updateAvailable:false,metricsAvailable:false,metrics:Object.fromEntries(failedMetrics.map(key => failed(key,'error')))},
     );
     await page.goto('http://dashboard.test/#dashboard');
     await page.reload();
@@ -135,19 +137,32 @@ async function run() {
       assert.match(await scope.innerText(),/—/);
       // The endpoint is resolved after the first status pass; until then an online server says so neutrally.
       assert.match(await scope.innerText(),/Endpoint pending/,`${view}: endpoint pending`);
+      // A Service with no external address is a state, not a wait.
+      const byName = (name) => view === 'rows' ? page.locator('.console-row',{hasText:name}) : page.locator('tbody tr',{hasText:name});
+      assert.match(await byName('Internal Keep').innerText(),/No external endpoint/,`${view}: no external endpoint`);
+      assert.doesNotMatch(await byName('Internal Keep').innerText(),/Endpoint pending/,`${view}: none is not pending`);
+      assert.match(await byName('Waiting Wharf').innerText(),/Endpoint pending/,`${view}: pending`);
+      assert.doesNotMatch(await byName('Waiting Wharf').innerText(),/No external endpoint/,`${view}: pending is not none`);
     }
     assert.doesNotMatch(await page.locator('#content').innerText(),/Check failed|Unable to confirm|Endpoint unavailable/);
     await page.getByRole('button',{name:'Row view',exact:true}).click();
     // The per-server pages use the same neutral rendering; the reasons stay in the Telemetry page's metric sources table.
-    for (const id of ['quiet','lost']) {
+    for (const id of ['quiet','lost','internal','waiting']) {
       await page.goto(`http://dashboard.test/#servers/${id}`);
       await page.getByTestId('server-overview').waitFor();
       await page.waitForFunction(() => !state.refreshing);
       // The roster panel keeps its own wording for a roster that cannot be shown.
       const overview = await page.locator('#content').evaluate((content) => { const copy = content.cloneNode(true); copy.querySelector('[data-testid="connected-players"]')?.remove(); return copy.textContent; });
-      assert.match(overview,id === 'quiet' ? /Online/ : /Unknown/,`${id} overview status`);
+      assert.match(overview,id === 'lost' ? /Unknown/ : /Online/,`${id} overview status`);
       assert.doesNotMatch(overview,/Check failed|Collection failed|Unable to confirm|Endpoint unavailable|Stale|Unsupported|Unavailable|Disabled|context deadline/i,`${id} overview: ${overview}`);
-      assert.match(overview,/Endpoint pending|10\.20\.0\.31/);
+      assert.match(overview,{quiet:/Endpoint pending/,lost:/10\.20\.0\.31/,internal:/No external endpoint/,waiting:/Endpoint pending/}[id],`${id} overview endpoint`);
+      if (id === 'internal') assert.doesNotMatch(overview,/Endpoint pending|Copy endpoint/);
+      await page.goto(`http://dashboard.test/#maintenance?serverId=${id}`);
+      await page.getByTestId('maintenance-events').waitFor();
+      const maintenance = await page.locator('#content').innerText();
+      if (id === 'internal') assert.match(maintenance,/No external endpoint/) && assert.doesNotMatch(maintenance,/Endpoint pending/);
+      if (id === 'waiting') assert.match(maintenance,/Endpoint pending/) && assert.doesNotMatch(maintenance,/No external endpoint/);
+      assert.doesNotMatch(maintenance,/Endpoint unavailable/);
     }
     await page.goto('http://dashboard.test/#servers/quiet/telemetry');
     await page.waitForFunction(() => !state.refreshing);
@@ -157,7 +172,7 @@ async function run() {
     await page.goto('http://dashboard.test/#dashboard');
     await page.reload();
     await row('lost').waitFor();
-    servers.splice(-2);
+    servers.splice(-4);
     viewer = true;
     await page.goto('http://dashboard.test/#dashboard');
     await page.reload();

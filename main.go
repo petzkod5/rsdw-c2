@@ -106,6 +106,10 @@ type Server struct {
 	LastSeen              string                   `json:"lastSeen"`
 	UpdateAvailable       bool                     `json:"updateAvailable"`
 	Endpoint              string                   `json:"endpoint"`
+	// EndpointState is "resolved", "pending" (an address is expected but not
+	// assigned yet) or "none" (the Service has no external endpoint). It is
+	// empty while the collector has not looked yet.
+	EndpointState string `json:"endpointState,omitempty"`
 }
 
 func (s Server) MarshalJSON() ([]byte, error) {
@@ -873,7 +877,7 @@ func (k *kubeOrchestrator) Refresh(ctx context.Context, server Server) (Server, 
 	if target.container.Image == "" {
 		return server, errors.New("observed server image is unavailable")
 	}
-	observed := observation{at: time.Now().UTC(), metrics: emptyMetrics(), status: status, image: target.container.Image, endpoint: k.resolveEndpoint(ctx, server)}
+	observed := observation{at: time.Now().UTC(), metrics: emptyMetrics(), status: status, image: target.container.Image, endpoint: k.readEndpoint(ctx, server)}
 	return joinObservation(server, observed, time.Now().UTC()), nil
 }
 
@@ -1018,7 +1022,7 @@ type App struct {
 	telemetryOnce  sync.Once
 	telemetry      *telemetryStore
 	clock          func() time.Time
-	backups       *backupController
+	backups        *backupController
 }
 
 func (a *App) ServeHTTP(w http.ResponseWriter, r *http.Request) {

@@ -189,10 +189,10 @@ type observation struct {
 	playerRoster     PlayerRoster
 	status           Status
 	image            string
-	endpoint         string
-	// endpointAt is when the liveness tier last tried to resolve endpoint.
-	endpointAt time.Time
-	network    *networkCounters
+	// endpoint is the join address and what is known about it. The liveness
+	// pass refreshes it after the status work, never before it.
+	endpoint endpointInfo
+	network  *networkCounters
 	// maxAge is how long the status stays valid after at. Zero means
 	// telemetryMaxAge.
 	maxAge time.Duration
@@ -447,8 +447,8 @@ func (a *App) collectLiveness(ctx context.Context) {
 // forward with their own timestamps. A new container starts from scratch. The
 // bool reports a new container, which makes the metrics tier due at once.
 func mergeLiveness(previous *observation, live observation) (observation, bool) {
-	if previous != nil && live.endpoint == "" {
-		live.endpoint, live.endpointAt = previous.endpoint, previous.endpointAt
+	if previous != nil {
+		live.endpoint = previous.endpoint
 	}
 	newRuntime := live.runtime != "" && (previous == nil || previous.runtime != live.runtime)
 	if live.runtime == "" || previous == nil || previous.runtime != live.runtime {
@@ -461,6 +461,17 @@ func mergeLiveness(previous *observation, live observation) (observation, bool) 
 	}
 	live.network, live.playerRoster, live.metricsAt = previous.network, previous.playerRoster, previous.metricsAt
 	return live, false
+}
+
+// applyEndpoint stores a refreshed join address on the server's newest
+// observation. It touches nothing else, so it cannot alter a status.
+func (a *App) applyEndpoint(id string, endpoint endpointInfo) {
+	cache := a.observations()
+	cache.mu.Lock()
+	defer cache.mu.Unlock()
+	if history := cache.history[id]; len(history) > 0 {
+		history[len(history)-1].endpoint = endpoint
+	}
 }
 
 // observeLiveness records one liveness observation for the server.
@@ -480,6 +491,15 @@ func (a *App) observeLiveness(ctx context.Context, server Server) {
 	result := observation{metrics: emptyMetricsFor(cfg), status: server.Status, image: server.CurrentImage, maxAge: cfg.livenessWindow()}
 	merge := false
 	if k, ok := a.orchestrator.(*kubeOrchestrator); ok && !a.demo {
+		// The join address is auxiliary: it is read after the status is
+		// recorded and acted on, so a slow Service read cannot delay or change
+		// either. It stays on this worker, which keeps the number of
+		// concurrent Kubernetes calls at the worker bound.
+		defer func() {
+			ctx, cancel := context.WithTimeout(ctx, cfg.endpointBudget())
+			defer cancel()
+			a.applyEndpoint(server.ID, k.refreshEndpoint(ctx, server, previous, cfg))
+		}()
 		var err error
 		result, err = k.collectLiveness(ctx, server, previous)
 		if err != nil {
@@ -706,8 +726,8 @@ func joinObservation(server Server, result observation, now time.Time) Server {
 	if result.image != "" {
 		server.CurrentImage = result.image
 	}
-	if result.endpoint != "" {
-		server.Endpoint = result.endpoint
+	if result.endpoint.state != "" {
+		server.Endpoint, server.EndpointState = result.endpoint.address, result.endpoint.state
 	}
 	server.UpdateAvailable = server.CurrentImage != "" && server.DesiredImage != "" && server.CurrentImage != server.DesiredImage
 	return server
@@ -719,6 +739,9 @@ func (a *App) markTelemetryPending(server Server) {
 	cache := a.observations()
 	cache.mu.Lock()
 	history := cache.history[server.ID]
+	if len(history) > 0 {
+		pending.endpoint = history[len(history)-1].endpoint
+	}
 	cache.history[server.ID] = retainObservations(history, pending, cfg.retainedSamples())
 	cache.mu.Unlock()
 }

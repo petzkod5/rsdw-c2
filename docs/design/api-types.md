@@ -180,6 +180,8 @@ export interface ServerCommon extends ServerSettings {
   updateAvailable: boolean;
   /** "" until observed (main.go:1273-1275). */
   endpoint: string;
+  /** Absent until the Service has been read. "none" is a Service with no external endpoint (ClusterIP). */
+  endpointState?: "resolved" | "pending" | "none";
 }
 
 /** Go: save.go:25-28 */

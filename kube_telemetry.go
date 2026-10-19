@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -149,85 +150,73 @@ type telemetryNode struct {
 	} `json:"status"`
 }
 
-// resolveEndpoint reads the chart's game Service and returns the address a
-// player should connect to. It never errors: a resolution failure just
-// leaves the endpoint unset, matching the other best-effort telemetry
-// sources in this file.
-func (k *kubeOrchestrator) resolveEndpoint(ctx context.Context, server Server) string {
-	ctx, cancel := context.WithTimeout(ctx, 2*k.telemetryConfig().KubeTimeout)
+// Endpoint states reported in the server payload. Only "pending" is a
+// transient condition; "none" is a Service that cannot be reached from outside
+// the cluster.
+const (
+	endpointResolved = "resolved"
+	endpointPending  = "pending"
+	endpointNone     = "none"
+)
+
+// lookupEndpoint reads the chart's game Service and classifies it. The address
+// is what a player should connect to when the state is endpointResolved.
+// endpointNone is a Service with no external endpoint to wait for (a ClusterIP
+// Service); endpointPending is a LoadBalancer without an ingress or a NodePort
+// without a node address. The bool is false when a Kubernetes read failed, in
+// which case nothing was learned and the caller keeps what it knew.
+func (k *kubeOrchestrator) lookupEndpoint(ctx context.Context, server Server) (string, string, bool) {
+	ctx, cancel := context.WithTimeout(ctx, k.telemetryConfig().endpointBudget())
 	defer cancel()
 	var service telemetryService
 	if err := k.kubeJSON(ctx, &service, "-n", server.Namespace, "get", "service", deploymentName(server.Release), "-o", "json"); err != nil {
-		return ""
+		return "", "", false
 	}
-	var port int
+	var port, nodePort int
 	for _, candidate := range service.Spec.Ports {
 		if candidate.Name == "game" {
-			port = candidate.Port
+			port, nodePort = candidate.Port, candidate.NodePort
 			break
 		}
 	}
 	if port == 0 {
-		return ""
+		return "", endpointNone, true
 	}
-	host := ""
 	for _, ingress := range service.Status.LoadBalancer.Ingress {
-		if ingress.IP != "" {
-			host = ingress.IP
-			break
-		}
-		if ingress.Hostname != "" {
-			host = ingress.Hostname
-			break
+		if host := cmp.Or(ingress.IP, ingress.Hostname); host != "" {
+			return net.JoinHostPort(host, strconv.Itoa(port)), endpointResolved, true
 		}
 	}
-	if host == "" && (service.Spec.Type == "NodePort" || service.Spec.Type == "LoadBalancer") {
-		nodePort := 0
-		for _, candidate := range service.Spec.Ports {
-			if candidate.Name == "game" {
-				nodePort = candidate.NodePort
-				break
-			}
-		}
+	switch service.Spec.Type {
+	case "LoadBalancer":
 		if nodePort == 0 {
-			return ""
+			// Without a node port the Service can only be reached through an
+			// ingress that has not been assigned yet.
+			return "", endpointPending, true
 		}
-		var nodes struct {
-			Items []telemetryNode `json:"items"`
+	case "NodePort":
+		if nodePort == 0 {
+			return "", endpointNone, true
 		}
-		if err := k.kubeJSON(ctx, &nodes, "get", "nodes", "-o", "json"); err != nil || len(nodes.Items) == 0 {
-			return ""
-		}
+	default:
+		return "", endpointNone, true
+	}
+	var nodes struct {
+		Items []telemetryNode `json:"items"`
+	}
+	if err := k.kubeJSON(ctx, &nodes, "get", "nodes", "-o", "json"); err != nil {
+		return "", "", false
+	}
+	for _, kind := range []string{"ExternalIP", "InternalIP"} {
 		for _, node := range nodes.Items {
 			for _, address := range node.Status.Addresses {
-				if address.Type == "ExternalIP" && address.Address != "" {
-					host = address.Address
-					break
-				}
-			}
-			if host != "" {
-				break
-			}
-		}
-		if host == "" {
-			for _, node := range nodes.Items {
-				for _, address := range node.Status.Addresses {
-					if address.Type == "InternalIP" && address.Address != "" {
-						host = address.Address
-						break
-					}
-				}
-				if host != "" {
-					break
+				if address.Type == kind && address.Address != "" {
+					return net.JoinHostPort(address.Address, strconv.Itoa(nodePort)), endpointResolved, true
 				}
 			}
 		}
-		port = nodePort
 	}
-	if host == "" {
-		return ""
-	}
-	return net.JoinHostPort(host, strconv.Itoa(port))
+	return "", endpointPending, true
 }
 
 func (k *kubeOrchestrator) resolvePod(ctx context.Context, server Server) (podTarget, Status, error) {

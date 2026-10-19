@@ -39,9 +39,24 @@ Freshness is per tier. The liveness window is three liveness intervals, never le
 
 The Metrics API sample age limit widened with this change. The old collector rejected a CPU or memory sample older than a fixed 45 seconds; a sample is now accepted until three resources intervals (`telemetry.metricsInterval`) have passed, never less than 45 seconds: 3 minutes by default, and up to 45 minutes at the 15 minute maximum. The same window decides how far apart two memory samples may be before a memory-pressure streak resets, which is why memory pressure also requires the metrics interval to be at most half of its duration (see [Memory pressure restarts](reboots.md#memory-pressure-restarts)).
 
-The join address of a server (`endpoint`) is read from its Service by the liveness tier, because it is one cheap Kubernetes API read and not an exec. It is read on the first pass, retried on every pass while it is unknown, and re-read once per metrics interval after that. The last known address carries forward when a read fails. Until it is known, the UI shows "Endpoint pending", never an error.
+The join address of a server (`endpoint`) is read from its Service, because it is one cheap Kubernetes API read and not an exec. The read is auxiliary: it runs after the pass has recorded the status, with its own bound of two Kubernetes timeouts, so a slow or hung Service read can never delay or change a status. It happens on the first pass, then on each of the next two passes while the address is not known, and after that once per metrics interval, as it does for a known address. The last known address carries forward when a read fails.
+
+The server payload reports what the read found as `endpointState`, next to the unchanged `endpoint` string:
+
+| `endpointState` | Meaning | Console text |
+| --- | --- | --- |
+| `resolved` | The Service has an address; `endpoint` holds it. | The address |
+| `pending` | An address is expected but not assigned: a LoadBalancer without an ingress, or a NodePort without a node address. Also used when the first read failed. | "Endpoint pending" |
+| `none` | The Service has no external endpoint, as for a ClusterIP Service. Nothing is being waited for. | "No external endpoint" |
+| absent | The Service has not been read yet. | "Endpoint pending" |
+
+None of these is an error, and none of them changes the status.
 
 Between metrics passes, each liveness observation carries the latest readings forward with their original timestamps. Charts place a point at its observation time, skip a repeated one, and break the line when two readings are further apart than a few intervals of that metric.
+
+## Upgrading
+
+Chart and C2 now require `telemetry.metricsInterval` to be at most half of `memoryPressure.duration` when `memoryPressure.enabled` is true. A release that sets `memoryPressure.duration` below `2m` with the default 60 second interval, for example `1m30s`, fails `helm upgrade` (and `helm template`) with a message naming both values, and C2 refuses to start with the same combination. Before upgrading, either raise the duration to at least twice the metrics interval or lower `telemetry.metricsInterval`. The defaults and any duration of `2m` or more are unaffected. See [Memory pressure restarts](reboots.md#memory-pressure-restarts).
 
 ## Configuration
 
