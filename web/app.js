@@ -484,6 +484,9 @@ function clearProtectedState() {
 function renderLoginScene(view) {
   if (!$('#content .login-scene')) {
     $('#content').replaceChildren($('#login-scene-template').content.cloneNode(true));
+    const art = $('.login-art-image');
+    if (art.complete && art.naturalWidth) art.classList.add('is-loaded');
+    else art.addEventListener('load', () => art.classList.add('is-loaded'), {once:true});
   }
   const status = view.mode === 'oidc' ? 'Sign in with your identity provider to access this cluster.' : 'Sign in with your admin token to access this cluster.';
   const error = view.logoutUnconfirmed ? 'Could not confirm server sign out. Retry sign out before leaving this browser.' : view.signInFailed ? 'Sign in failed or this identity has no assigned role. Contact your administrator or try another identity.' : '';
@@ -493,6 +496,7 @@ function renderLoginScene(view) {
 }
 function lockedState() {
   document.body?.classList.add('auth-locked');
+  document.body?.classList.remove('auth-booting');
   $('.page-controls').hidden = true;
   $('#content').setAttribute('aria-busy','false');
   renderLoginScene({mode:state.authMode === 'oidc' ? 'oidc' : 'token', signInFailed:state.signInFailed, logoutUnconfirmed:!!state.logoutCSRF});
@@ -522,7 +526,7 @@ function applyAuth(auth) {
     $('#login-dialog').close();
   }
   if (!auth.authenticated) { requireLogin(false); return false; }
-  document.body?.classList.remove('auth-locked');
+  document.body?.classList.remove('auth-locked', 'auth-booting');
   Object.assign(state, {identity, authSubject:auth.subject || (auth.mode === 'token' ? 'token-admin' : ''), csrfToken:auth.csrfToken || '', role:auth.role, capabilities:auth.capabilities || {}, authRequired:false});
   if (changed || !validDisplayTimezone()) loadDisplayTimezone();
   $('.page-controls').hidden = false;
@@ -1381,6 +1385,7 @@ async function refresh() {
   } catch (error) {
     if (!current() || error.name === 'AbortError') return;
     if (state.authRequired) { lockedState(); return; }
+    document.body?.classList.remove('auth-booting');
     $('#error-banner').textContent = error.message;
     $('#error-banner').hidden = false;
     if (error.telemetryRequest && !telemetryReceived) hideCachedPlayerNames(selectedId);
@@ -2278,5 +2283,4 @@ if (new URLSearchParams(location.search).get('signin') === 'failed') {
   state.signInFailed = true;
   history.replaceState(null, '', location.pathname + location.hash);
 }
-lockedState();
 navigate();

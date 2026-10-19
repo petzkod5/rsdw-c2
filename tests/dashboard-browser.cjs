@@ -25,8 +25,6 @@ async function run() {
         '/':'index.html',
         '/app.js':'app.js',
         '/styles.css':'styles.css',
-        '/assets/dragonwilds-login-desktop-v1.png':'assets/dragonwilds-login-desktop-v1.png',
-        '/assets/dragonwilds-login-mobile-v1.png':'assets/dragonwilds-login-mobile-v1.png',
       };
       if (files[url.pathname]) return route.fulfill({path:path.join(__dirname,'../web',files[url.pathname])});
       let body;

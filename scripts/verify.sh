@@ -32,6 +32,7 @@ node tests/settings-browser.cjs
 node tests/player-roster-browser.cjs
 node tests/stop-browser.cjs
 node tests/dashboard-browser.cjs
+node tests/login-budget.cjs
 node tests/backups-browser.cjs
 node tests/backups-ui-contract.cjs
 helm lint charts/rsdw-c2 --set auth.adminTokenSecret.name=rsdw-c2-admin

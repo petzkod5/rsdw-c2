@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"crypto/rand"
-	"crypto/sha256"
 	"embed"
 	"encoding/hex"
 	"encoding/json"
@@ -18,7 +17,6 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
-	"path"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -33,30 +31,6 @@ var webFiles embed.FS
 
 var webRoot, _ = fs.Sub(webFiles, "web")
 var webHandler = newWebHandler(webRoot)
-
-func newWebHandler(root fs.FS) http.Handler {
-	index, err := fs.ReadFile(root, "index.html")
-	if err != nil {
-		panic(err)
-	}
-	html := string(index)
-	for _, name := range []string{"app.js", "styles.css"} {
-		content, err := fs.ReadFile(root, name)
-		if err != nil {
-			panic(err)
-		}
-		html = strings.ReplaceAll(html, `"/`+name+`"`, fmt.Sprintf(`"/%s?v=%x"`, name, sha256.Sum256(content)))
-	}
-	files := http.FileServer(http.FS(root))
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if name := path.Clean("/" + r.URL.Path); name == "/" || name == "/index.html" {
-			w.Header().Set("Cache-Control", "no-store")
-			http.ServeContent(w, r, "index.html", time.Time{}, strings.NewReader(html))
-			return
-		}
-		files.ServeHTTP(w, r)
-	})
-}
 
 type Status string
 
