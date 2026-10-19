@@ -108,7 +108,7 @@ func TestRestoreRecoversAppliedButUnfinalizedTransaction(t *testing.T) {
 	}
 	run := func(mode string) {
 		t.Helper()
-		out, err := exec.Command("sh", "-ec", restoreTransactionScript, "restore", root, mode, "true", "true").CombinedOutput()
+		out, err := exec.Command("sh", "-ec", restoreTransactionScript, "restore", shellPath(root), mode, "true", "true").CombinedOutput()
 		if err != nil {
 			t.Fatal(string(out), err)
 		}

@@ -4,10 +4,11 @@ const {once} = require('node:events');
 const https = require('node:https');
 const path = require('node:path');
 const {chromium} = require('playwright');
+const {killTree, canDetach} = require('./fixture-processes.cjs');
 
 const root = path.resolve(__dirname, '..');
 const fixture = spawn('go', ['test', '-count=1', '-run', '^TestOIDCBrowserFixture$', '-v', '-timeout', '90s'], {
-  cwd:root, detached:true,
+  cwd:root, detached:canDetach,
   env:{...process.env,RSDW_OIDC_BROWSER_TEST:'1',RSDW_OIDC_BROWSER_HTTP:'0'},
   stdio:['ignore','pipe','pipe'],
 });
@@ -127,6 +128,6 @@ let deadline;
 Promise.race([run(),new Promise((_,reject) => {deadline = setTimeout(() => reject(new Error('OIDC browser check timed out')),90000);})]).catch((error) => {console.error(error);console.error(logs);process.exitCode=1;}).finally(async () => {
   clearTimeout(deadline);
   if (browser) await browser.close();
-  if (fixture.exitCode === null) process.kill(-fixture.pid,'SIGINT');
+  if (fixture.exitCode === null) killTree(fixture,canDetach,'SIGINT');
   await exited;
 });

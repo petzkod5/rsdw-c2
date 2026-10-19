@@ -277,7 +277,7 @@ while [ "$ancestor" != / ] && [ "$ancestor" != . ]; do
 done
 if [ "$mode" = prepare ]; then
   recover
-  mkdir -m 700 -- "$stage"
+  (umask 077; mkdir -- "$stage")
   exit
 fi
 if [ "$mode" = finalize ]; then
@@ -419,7 +419,7 @@ func (a *App) restoreFiles(ctx context.Context, server Server, files []restoreFi
 			return err
 		}
 		run := func(mode string) error {
-			output, err := exec.CommandContext(ctx, "sh", "-ec", restoreTransactionScript, "restore", root, mode, overwrite, fmt.Sprint(worlds > 0)).CombinedOutput()
+			output, err := exec.CommandContext(ctx, "sh", "-ec", restoreTransactionScript, "restore", shellPath(root), mode, overwrite, fmt.Sprint(worlds > 0)).CombinedOutput()
 			if strings.Contains(string(output), "RESTORE_CONFIRMATION_REQUIRED") {
 				return errRestoreConfirmation
 			}

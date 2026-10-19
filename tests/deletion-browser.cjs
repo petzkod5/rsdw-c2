@@ -2,7 +2,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const {chromium} = require('playwright');
-const {fixtureProcesses} = require('./fixture-processes.cjs');
+const {fixtureProcesses, serverBinary} = require('./fixture-processes.cjs');
 
 const root = path.resolve(__dirname, '..');
 fs.mkdirSync(path.join(root, '.tmp'), {recursive:true});
@@ -32,7 +32,7 @@ let browser;
 const {start, close} = fixtureProcesses(root);
 
 async function run() {
-  const address = await start(path.join(root, '.tmp/rsdw-c2'), [], {
+  const address = await start(serverBinary(root), [], {
     RSDW_AUTH_MODE:'token', RSDW_DEMO_DATA:'true', RSDW_ADMIN_TOKEN:token,
     RSDW_STATE_FILE:stateFile, RSDW_LISTEN_ADDR:'127.0.0.1:0',
   }, /listening on (127\.0\.0\.1:\d+)/);

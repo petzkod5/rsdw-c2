@@ -7,6 +7,8 @@ cluster_name="rsdw-c2-smoke-$$"
 image_name=rsdw-c2:smoke
 context="kind-$cluster_name"
 export KIND_EXPERIMENTAL_PROVIDER=docker
+# Git Bash on Windows rewrites arguments such as --raw=/readyz as host paths. Keep in-cluster paths intact.
+export MSYS2_ARG_CONV_EXCL='--raw=;RSDW_CHART=;KUBECONFIG='
 kube=(kubectl --context "$context" --request-timeout=10s)
 http=(curl --connect-timeout 5 --max-time 30)
 command -v jq >/dev/null
