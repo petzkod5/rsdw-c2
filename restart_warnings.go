@@ -40,7 +40,7 @@ func warningEligible(state *State, schedule rebootSchedule, now time.Time) bool 
 }
 
 func warningDeliveryValid(state *State, delivery Delivery, now time.Time) bool {
-	if delivery.Event.Kind != RestartWarning {
+	if delivery.Event.Kind != RestartWarning || delivery.Test {
 		return true
 	}
 	if warning := delivery.Event.Evidence.RestartWarning; warning != nil && warning.Trigger == "memory-pressure" {

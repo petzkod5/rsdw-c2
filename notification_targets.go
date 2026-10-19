@@ -68,6 +68,10 @@ type QuietHours struct {
 }
 
 func integrationErrorFields(err error) map[string]string {
+	var fieldErr integrationFieldError
+	if errors.As(err, &fieldErr) {
+		return map[string]string{fieldErr.Field: fieldErr.Message}
+	}
 	message := err.Error()
 	fields := []string{"form"}
 	switch {
