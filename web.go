@@ -120,7 +120,6 @@ func newWebHandler(root fs.FS) http.Handler {
 		versions[name] = fmt.Sprintf("%x", sum)
 		html = strings.ReplaceAll(html, `"/`+name+`"`, fmt.Sprintf(`"/%s?v=%s"`, name, versions[name]))
 	}
-	modified := time.Now().UTC().Truncate(time.Second)
 	indexEntry := newWebEntry("index.html", []byte(html))
 	var entries sync.Map
 	lookup := func(name string) *webEntry {
@@ -166,6 +165,8 @@ func newWebHandler(root fs.FS) http.Handler {
 			}
 		}
 		header.Set("ETag", etag)
-		http.ServeContent(w, r, name, modified, bytes.NewReader(body))
+		// The embedded FS has no modification time, so there is deliberately no Last-Modified: process start would
+		// change on every deploy even when the bytes did not, and the strong ETag already validates content.
+		http.ServeContent(w, r, name, time.Time{}, bytes.NewReader(body))
 	})
 }
