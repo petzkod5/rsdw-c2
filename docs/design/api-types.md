@@ -295,8 +295,10 @@ export interface PlayerRoster {
   /** omitempty in Go, but telemetryFor() and viewerPlayerRoster() always set it. */
   status?: RosterStatus;
   reason?: string;
-  /** Milliseconds the roster stays fresh; omitted when 0 (non-'available' rosters). Max 45000. */
+  /** Milliseconds the roster stays fresh; omitted when 0 (non-'available' rosters). At most freshWindowMs. */
   freshForMs?: number;
+  /** The whole freshness window of the player reading: three metrics intervals, never under 45000. Sent to every role. */
+  freshWindowMs?: number;
   /** null (no omitempty, nil slice) when status is 'unavailable' or 'error'. */
   players: ConnectedPlayer[] | null;
 }

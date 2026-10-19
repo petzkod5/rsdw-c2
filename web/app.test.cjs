@@ -11,7 +11,8 @@ state.capabilities = {dashboard:true, telemetry:true, events:true, maintenance:t
 state.servers = [{id:'world', name:'Test world', status:'online', players:2, maxPlayers:4, metricsAvailable:false}];
 state.telemetry = {samples:[], healthChecks:[], metricDefinitions:[{metric:'tick_rate', description:'Ticks <per> second'}]};
 let html = telemetry();
-assert.match(html, /Tick rate \(TPS\) samples are not available yet/);
+assert.doesNotMatch(html, /Tick rate|Tick execution duration|Unsupported|Check failed|p95 tick duration/);
+assert.doesNotMatch(context.ui.telemetryRows().map((row) => row.metric).join(), /tick/);
 assert.match(html, /Inbound \(bytes\/s\) samples are not available yet/);
 assert.match(html, /Ticks &lt;per&gt; second/);
 assert.match(html, /data-testid="log-output"/);
@@ -112,10 +113,11 @@ assert.match(eventsPage(), /data-testid="load-older-events"/);
 state.eventTotal = state.events.length;
 assert.doesNotMatch(eventsPage(), /data-testid="load-older-events"/);
 html = maintenance();
-assert.match(html, /Endpoint unavailable\. Ask your cluster operator for the server address and game port\./);
+assert.doesNotMatch(html, /Endpoint unavailable|cluster operator/);
+assert.match(html, /Endpoint pending/);
 state.servers[0].endpoint = 'game.example:7777';
 assert.match(maintenance(), /game\.example:7777/);
-assert.doesNotMatch(maintenance(), /Endpoint unavailable/);
+assert.doesNotMatch(maintenance(), /Endpoint unavailable|Endpoint pending/);
 delete state.servers[0].endpoint;
 assert.match(html, /Recent changes/);
 assert.match(html, /Audit trail/);
@@ -511,7 +513,7 @@ test('stopped telemetry does not fetch logs or show a stale-data error', async (
 });
 
 function rosterResponse(id = 'a', players = [{name:'Alice', characterName:'Mage'}], count = 1) {
-  return {server:{id, name:`World ${id}`, maxPlayers:4}, playerRoster:{status:'available', freshForMs:45000, players}, metrics:{players:{value:count, status:'available', observedAt:new Date().toISOString()}}, samples:[]};
+  return {server:{id, name:`World ${id}`, maxPlayers:4}, playerRoster:{status:'available', freshForMs:45000, freshWindowMs:45000, players}, metrics:{players:{value:count, status:'available', observedAt:new Date().toISOString()}}, samples:[]};
 }
 
 test('connected players show labeled escaped fields, preserve duplicates, and distinguish empty from unavailable', () => {
@@ -656,8 +658,9 @@ test('overview limits viewer fields and gates each admin control, endpoint, and 
   let html = f.ui.serverOverview();
   assert.match(html, /Alice|Mage/);
   assert.match(html, /1 MB/);
-  assert.match(html, /Stale/);
-  assert.match(html, /Reported &lt;not ready&gt;/);
+  assert.doesNotMatch(html, /Stale/);
+  assert.match(html, /Engine readiness: Not ready/);
+  assert.doesNotMatch(html, /Reported/);
   assert.doesNotMatch(html, /999|secret-|private:7777|Next reboot|Join endpoint|data-action=|#maintenance|#events|#reboots|Server logs/);
   Object.assign(s.capabilities, {maintenance:true,reboots:true,restart:true,update:true,updateCheck:true,delete:true});
   s.reboots = [
@@ -684,7 +687,7 @@ test('overview limits viewer fields and gates each admin control, endpoint, and 
   s.capabilities.maintenance = true;
   s.servers[0].endpoint = '';
   s.rebootsAvailable = false;
-  assert.match(f.ui.serverOverview(), /overview-next-reboot">Unavailable/);
+  assert.match(f.ui.serverOverview(), /overview-next-reboot">—/);
   assert.doesNotMatch(f.ui.serverOverview(), /copy-endpoint/);
 });
 
@@ -922,8 +925,86 @@ test('dashboard distinguishes the first observation from a failed status check',
   f.ui.state.servers[0].metrics.players = {status:'unavailable',reason:'Kubernetes check timed out'};
   row = f.ui.dashboardModel().rows[0];
   assert.equal(row.status,'unknown');
-  assert.equal(row.statusLabel,'Unable to confirm');
-  assert.equal(row.playersText,'Check failed / 4');
+  assert.equal(row.statusLabel,'Unknown');
+  assert.equal(row.playersText,'— / 4');
+});
+
+test('dashboard rows report status only and never show collection failures', () => {
+  const f = refreshFixture(false,{maintenance:true});
+  const failing = ['error','stale','unsupported','unavailable','faulted','disabled'];
+  for (const [status,label] of [['online','Online'],['starting','Starting'],['attention','Needs attention'],['stopped','Stopped'],['unknown','Unknown']]) {
+    for (const reading of failing) {
+      const metric = {status:reading,reason:'Game API players: context deadline exceeded'};
+      f.ui.state.servers = [{id:'a', status, maxPlayers:4, metrics:{players:metric, tickRate:metric, memoryUsedBytes:metric, memoryLimitBytes:metric, cpuPercent:metric}}];
+      const row = f.ui.dashboardModel().rows[0];
+      assert.equal(row.statusLabel,label,`${status} label`);
+      const text = [row.playersText,row.tickText,...row.resources.map((item) => item.text)].join(' | ');
+      assert.doesNotMatch(text,/Check failed|Collection failed|Unable to confirm|Stale|Unsupported|Disabled|Unavailable/i,`${status}/${reading}: ${text}`);
+    }
+  }
+  const warming = {status:'warming_up',reason:'Waiting for the first metrics sample'};
+  f.ui.state.servers = [{id:'a', status:'online', maxPlayers:4, metrics:{players:warming, tickRate:warming, memoryUsedBytes:warming, memoryLimitBytes:warming, cpuPercent:warming}}];
+  const row = f.ui.dashboardModel().rows[0];
+  assert.equal(row.statusLabel,'Online');
+  assert.equal(row.playersText,'Collecting / 4');
+  assert.equal(row.tickText,'Collecting');
+});
+
+test('a missing endpoint is pending or blank, never unavailable', () => {
+  const f = refreshFixture(false,{maintenance:true});
+  for (const [status,want] of [['online','Endpoint pending'],['starting','Endpoint pending'],['attention','Endpoint pending'],['unknown','Endpoint pending'],['stopped','']]) {
+    f.ui.state.servers = [{id:'a', status, endpoint:'', maxPlayers:4, metrics:{}}];
+    const row = f.ui.dashboardModel().rows[0];
+    assert.equal(row.endpoint,want,`${status} endpoint`);
+    assert.doesNotMatch(f.ui.dashboardModel().rows.map((item) => item.endpoint).join(' '),/unavailable/i);
+  }
+  f.ui.state.servers = [{id:'a', status:'online', endpoint:'10.0.0.8:7777', maxPlayers:4, metrics:{}}];
+  assert.equal(f.ui.dashboardModel().rows[0].endpoint,'10.0.0.8:7777');
+});
+
+test('the server overview reports status only and never shows collection failures', () => {
+  const f = refreshFixture(false,{maintenance:true});
+  const failing = ['error','stale','unsupported','unavailable','faulted','disabled'];
+  for (const status of ['online','starting','attention','stopped','unknown']) {
+    for (const reading of failing) {
+      const metric = {status:reading,reason:'Game API players: context deadline exceeded'};
+      f.ui.state.servers = [{id:'a', status, endpoint:'', maxPlayers:4, metrics:{players:metric, tickRate:metric, memoryUsedBytes:metric, memoryLimitBytes:metric, cpuPercent:metric, engineReady:metric, uptimeSeconds:metric}}];
+      Object.assign(f.ui.state, {page:'servers', serverId:'a', telemetry:null});
+      // The roster panel keeps its own wording for a roster that cannot be shown.
+      const html = f.ui.serverOverview().replace(/<section class="panel" aria-labelledby="connected-players-heading".*?<\/section>/s,'');
+      assert.match(html,/data-testid="server-overview"/);
+      assert.doesNotMatch(html,/Check failed|Collection failed|Unable to confirm|Stale|Unsupported|Disabled|Unavailable|Endpoint unavailable|context deadline|Engine readiness/i,`${status}/${reading}`);
+      assert.match(html,/(?:—|Collecting) \/ 4/,`${status}/${reading}: players are a dash or collecting`);
+    }
+  }
+  const warming = {status:'warming_up',reason:'Waiting for the first metrics sample'};
+  f.ui.state.servers = [{id:'a', status:'online', maxPlayers:4, metrics:{players:warming, memoryUsedBytes:warming, memoryLimitBytes:warming}}];
+  assert.match(f.ui.serverOverview(),/Collecting \/ 4/);
+  f.ui.state.servers = [{id:'a', status:'online', maxPlayers:4, metrics:{players:{status:'available',value:3}, engineReady:{status:'available',value:1}}}];
+  assert.match(f.ui.serverOverview(),/3 \/ 4/);
+  assert.match(f.ui.serverOverview(),/Engine readiness: Ready/);
+});
+
+test('viewers get the same roster freshness window as admins', async () => {
+  const f = refreshFixture(false);
+  assert.equal(f.ui.state.telemetryConfig,null,'viewers have no polling configuration');
+  const response = rosterResponse();
+  // 100 s into a 180 s window: the server says the roster is fresh for another 80 s.
+  response.metrics.players.observedAt = new Date(f.clock.now - 100000).toISOString();
+  Object.assign(response.playerRoster,{freshForMs:80000, freshWindowMs:180000});
+  const pending = f.ui.refresh();
+  await f.discover();
+  f.reply('/api/servers/a/telemetry?range=60s',response);
+  await pending;
+  assert.match(f.element('#content').innerHTML,/Alice/);
+  assert.doesNotMatch(f.element('#content').innerHTML,/Connected players are stale/);
+  f.advanceMonotonic(79000);
+  f.ui.render();
+  assert.match(f.element('#content').innerHTML,/Alice/);
+  f.advanceMonotonic(2000);
+  f.ui.render();
+  assert.match(f.element('#content').innerHTML,/Connected players are stale/);
+  assert.doesNotMatch(f.element('#content').innerHTML,/Alice|Mage/);
 });
 
 test('paused telemetry expires names locally without another request', () => {
@@ -1149,7 +1230,8 @@ test('maintenance shows deploy progress only for the selected watched server', (
   assert.doesNotMatch(maintenance(), /data-testid="deploy-progress"/);
   state.serverId = '';
   html = context.ui.dashboard();
-  assert.match(html, /class="console-row equal-height  deploying"/);
+  assert.match(html, /class="console-row equal-height  deploying no-tick"/);
+  assert.doesNotMatch(html, /Tick rate|Unsupported|Check failed/);
   state.dashboardView = 'table';
   assert.match(context.ui.dashboard(), /<tr class="deploying">/);
   state.dashboardView = 'rows';
@@ -1170,7 +1252,7 @@ test('dashboard model shares availability, badges, schedules and row actions acr
     {id:'a',worldName:'Aurora <&>',endpoint:'10.20.0.21:7777',status:'online',maxPlayers:12,metrics:{players:metric(5),tickRate:metric(60),memoryUsedBytes:metric(0),memoryLimitBytes:metric(1024),cpuPercent:metric(0)}},
     {id:'b',worldName:'Brin',endpoint:'10.20.0.22:7777',status:'online',maxPlayers:8,metrics:{players:metric(2)}},
     {id:'c',worldName:'Cinder',endpoint:'<host>:7777',status:'attention',updateAvailable:true,maxPlayers:4,metrics:{players:metric(2),memoryUsedBytes:{value:999,status:'stale'}}},
-    {id:'d',worldName:'Ember',status:'stopped',maxPlayers:16,metrics:{players:metric(99),cpuPercent:metric(90)}},
+    {id:'d',worldName:'Ember',status:'stopped',maxPlayers:16,metrics:{players:metric(99),tickRate:metric(60),cpuPercent:metric(90)}},
   ];
   const model = context.ui.dashboardModel();
   assert.deepEqual(JSON.parse(JSON.stringify(model.summary)),{total:4,online:3,players:9,capacity:40,incomplete:false});
@@ -1180,6 +1262,9 @@ test('dashboard model shares availability, badges, schedules and row actions acr
   assert.equal(model.rows[3].resources[1].percent,null);
   assert.equal(model.rows[3].playersText,'0 / 16');
   assert.equal(model.rows[3].tickText,'Stopped');
+  assert.equal(model.rows[0].tickText,'60 TPS');
+  assert.equal(model.rows[1].tickText,null);
+  assert.equal(model.rows[2].tickText,null);
   assert.equal(model.rows[0].schedule.text,vm.runInContext("date('2030-01-02T00:00:00Z')",context));
   assert.equal(model.rows[2].schedule.text,'Not scheduled');
   html = context.ui.dashboard();
@@ -1194,9 +1279,12 @@ test('dashboard model shares availability, badges, schedules and row actions acr
   assert.match(html,/data-action="start" data-id="d"/);
   assert.doesNotMatch(html,/data-action="(?:restart|stop)" data-id="d"/);
   assert.match(html,/aria-label="Resources"/);
+  assert.equal((html.match(/console-label">Tick rate/g) || []).length,2);
+  assert.equal((html.match(/console-row equal-height[^"]* no-tick"/g) || []).length,2);
   state.dashboardView = 'table';
   html = context.ui.dashboard();
   assert.match(html,/<table>/);
+  assert.match(html,/<th>Tick rate<\/th>/);
   assert.match(html,/Row view/);
   assert.match(html,/data-action="stop" data-id="c"/);
   state.fleetFilter = 'online';
@@ -1215,4 +1303,29 @@ test('dashboard model shares availability, badges, schedules and row actions acr
   state.dashboardView = 'rows';
   html = context.ui.dashboard();
   assert.doesNotMatch(html,/10\.20|&lt;host|Next reboot|console-badge update|data-action="(?:start|stop|restart)"/);
+});
+
+test('tick UI is rendered only when the server reports tickRate', () => {
+  state.capabilities = {dashboard:true, telemetry:true, maintenance:true, create:true};
+  state.rebootsAvailable = true;
+  state.reboots = [];
+  state.fleetFilter = 'all';
+  const metric = (value) => ({value,status:'available'});
+  const base = {players:metric(2), memoryUsedBytes:metric(1), memoryLimitBytes:metric(2), cpuPercent:metric(1)};
+  const tickMetrics = {tickRate:metric(30), tickP50Ms:metric(1), tickP95Ms:metric(2), tickP99Ms:metric(3), tickWindowSeconds:metric(10), tickSampleCount:metric(300)};
+  state.servers = [{id:'a', worldName:'A', status:'online', maxPlayers:4, metrics:base}];
+  state.dashboardView = 'table';
+  assert.doesNotMatch(context.ui.dashboard(), /Tick rate|Unsupported|Check failed/);
+  state.servers[0].metrics = {...base, ...tickMetrics};
+  assert.match(context.ui.dashboard(), /<th>Tick rate<\/th>/);
+  state.dashboardView = 'rows';
+  state.serverId = 'a';
+  state.telemetry = {samples:[], healthChecks:[], metrics:base, metricDefinitions:[{metric:'players', description:'p'}, {metric:'tickRate', description:'t'}]};
+  let html = context.ui.telemetry();
+  assert.doesNotMatch(html, /Tick rate|Tick execution duration|tickRate|Unsupported/);
+  state.telemetry.metrics = {...base, ...tickMetrics};
+  html = context.ui.telemetry();
+  assert.match(html, /Tick rate/);
+  assert.match(html, /Tick execution duration/);
+  assert.match(html, /<td>tickRate<\/td>/);
 });

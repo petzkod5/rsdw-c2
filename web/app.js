@@ -54,6 +54,7 @@ const discordStatusCopy = {
 };
 const state = {
   deletions: {},
+  telemetryConfig: null,
   routeError: '',
   routeScope: false,
   deployWatches: {},
@@ -190,12 +191,21 @@ function hideCachedPlayerNames(serverId) {
   if (state.telemetry?.server?.id === serverId) state.telemetry = {...state.telemetry, playerRoster:null};
 }
 
+// The server sends the exact time a roster stays fresh (freshForMs) and the whole window it was judged against (freshWindowMs), to every role.
+// These bounds only reject nonsense: 45 minutes is three times the longest metrics interval the server accepts (15 minutes).
+const rosterFreshCeilingMs = 45 * 60 * 1000;
+function rosterFreshLimitMs(roster) {
+  const window = Number(roster?.freshWindowMs);
+  if (Number.isFinite(window) && window > 0) return Math.min(window, rosterFreshCeilingMs);
+  const seconds = Number(state.telemetryConfig?.metricFreshnessSeconds?.players);
+  return Number.isFinite(seconds) && seconds > 0 ? Math.min(seconds * 1000, rosterFreshCeilingMs) : rosterFreshCeilingMs;
+}
 function acceptTelemetry(result, startedAt, receivedAt) {
   const key = rosterObservationKey(result);
   const metric = result?.metrics?.players;
   const freshForMs = Number(result?.playerRoster?.freshForMs);
   state.telemetry = result;
-  if (key && metric?.status === 'available' && result.playerRoster?.status === 'available' && Number.isFinite(freshForMs) && freshForMs >= 0 && freshForMs <= 45000) {
+  if (key && metric?.status === 'available' && result.playerRoster?.status === 'available' && Number.isFinite(freshForMs) && freshForMs >= 0 && freshForMs <= rosterFreshLimitMs(result.playerRoster)) {
     const deadline = receivedAt + Math.max(0, freshForMs - Math.max(0, receivedAt - startedAt));
     state.rosterDeadline = state.rosterObservation === key && state.rosterDeadline > 0 ? Math.min(state.rosterDeadline, deadline) : deadline;
     state.rosterObservation = key;
@@ -642,27 +652,64 @@ function metricValue(server, key) {
   if (reading) return reading.status === 'available' && typeof reading.value === 'number' && Number.isFinite(reading.value) ? reading.value : null;
   return state.mode === 'demo' ? server[key] ?? null : null;
 }
+const tickMetricKeys = ['tickRate', 'tickP50Ms', 'tickP95Ms', 'tickP99Ms', 'tickWindowSeconds', 'tickSampleCount'];
+// Tick metrics are opt-in on the server (RSDW_TICK_METRICS); render them only when the server reports them.
+function hasTick(server) {
+  return Boolean(server?.metrics && 'tickRate' in server.metrics);
+}
 function metricText(server, key, suffix = '') {
   const value = metricValue(server, key);
   if (value != null) return number(value, suffix);
   if (['checking','starting'].includes(serverStatus(server))) return 'Collecting';
   const reading = server.metrics?.[key];
-  if (server.status === 'unknown' && reading?.status === 'unavailable' && reading.reason && reading.reason !== 'No observation collected') return 'Check failed';
-  return ({unsupported:'Unsupported', stale:'Stale', error:'Collection failed', warming_up:'Collecting', warming:'Collecting', starting:'Starting', faulted:'Collection failed', stopped:'Stopped', unavailable:'Unavailable'})[reading?.status] || 'Awaiting sample';
+  return ({unsupported:'Unsupported', stale:'Stale', error:'Collection failed', warming_up:'Collecting', warming:'Collecting', starting:'Starting', faulted:'Collection failed', stopped:'Stopped', unavailable:'Unavailable', disabled:'Disabled'})[reading?.status] || 'Awaiting sample';
+}
+// The join address is a best-effort detail: when it is not known yet the UI says so neutrally, and a stopped server shows nothing.
+function endpointText(server) {
+  if (server.endpoint) return server.endpoint;
+  return server.status === 'stopped' ? '' : 'Endpoint pending';
+}
+// Dashboard rows only report status. A metric without a reading is loading or simply absent: the reason lives on the Telemetry page.
+function dashboardMetricText(server, key, suffix = '') {
+  const value = metricValue(server, key);
+  if (value != null) return number(value, suffix);
+  if (['checking','starting'].includes(serverStatus(server)) || ['warming_up','warming','starting'].includes(server.metrics?.[key]?.status)) return 'Collecting';
+  return '—';
+}
+function intervalText(seconds) {
+  const value = Number(seconds);
+  if (!Number.isFinite(value) || value <= 0) return '';
+  if (value >= 120 && value % 60 === 0) return `${value / 60} minutes`;
+  return `${value} seconds`;
+}
+function pollingNote() {
+  const config = state.telemetryConfig;
+  if (!config) return 'Status and metrics are collected in the background, even with no browser open.';
+  const disk = config.sources?.disk?.enabled ? `, disk every ${intervalText(config.sources.disk.intervalSeconds)}` : '';
+  const exec = config.execMetricsEnabled ? '' : ' Metrics that run commands inside the game container are turned off.';
+  return `Status is checked every ${intervalText(config.livenessIntervalSeconds)} and metrics are collected every ${intervalText(config.metricsIntervalSeconds)}${disk}, even with no browser open. A metric that cannot be collected never changes server status.${exec}`;
 }
 function metricSources(server) {
   const metrics = server.metrics || {};
-  return `<section class="panel section-gap"><div class="panel-heading"><h2>Metric sources</h2></div><p class="inline-note">Collection is scheduled every 15 seconds, even with no browser open. Slow sources can lengthen the interval. History covers up to one hour and resets when the dashboard service restarts.</p><div class="table-wrap"><table><thead><tr><th>Metric</th><th>Status</th><th>Source</th><th>Observed</th><th>Details</th></tr></thead><tbody>${Object.entries(metrics).map(([key, reading]) => `<tr><td>${escapeHTML(metricLabels[key] || key)}</td><td>${escapeHTML(reading.status)}</td><td>${escapeHTML(reading.source || 'Not configured')}</td><td>${escapeHTML(date(reading.observedAt))}</td><td>${escapeHTML(reading.reason || reading.unit || '')}</td></tr>`).join('')}</tbody></table></div></section>`;
+  return `<section class="panel section-gap"><div class="panel-heading"><h2>Metric sources</h2></div><p class="inline-note">${escapeHTML(pollingNote())} Slow sources can lengthen the interval. History covers up to one hour and resets when the dashboard service restarts.</p><div class="table-wrap"><table><thead><tr><th>Metric</th><th>Status</th><th>Source</th><th>Observed</th><th>Details</th></tr></thead><tbody>${Object.entries(metrics).map(([key, reading]) => `<tr><td>${escapeHTML(metricLabels[key] || key)}</td><td>${escapeHTML(reading.status)}</td><td>${escapeHTML(reading.source || 'Not configured')}</td><td>${escapeHTML(date(reading.observedAt))}</td><td>${escapeHTML(reading.reason || reading.unit || '')}</td></tr>`).join('')}</tbody></table></div></section>`;
 }
 function telemetryRows() {
   const metrics = state.telemetry?.metrics || state.telemetry?.server?.metrics || {};
-  return samples().flatMap((sample) => Object.keys(metricLabels).map((key) => ({
+  const keys = Object.keys(metricLabels).filter((key) => !tickMetricKeys.includes(key) || 'tickRate' in metrics);
+  // Samples carry the latest reading forward until its source reads again; export each reading once.
+  const last = {};
+  return samples().flatMap((sample) => keys.map((key) => ({
     timestamp: sample.timestamp, metric: key, value: sample[key] ?? '',
     observedAt: sample.observedAt?.[key] || '',
     status: sample.status?.[key] || (sample[key] == null ? 'unavailable' : 'available'),
     reason: sample.reason?.[key] || '',
     unit: metrics[key]?.unit || '', source: metrics[key]?.source || '',
-  })));
+  }))).filter((row) => {
+    const signature = row.observedAt ? `${row.observedAt}|${row.status}|${row.value}` : '';
+    if (signature && last[row.metric] === signature) return false;
+    last[row.metric] = signature;
+    return true;
+  });
 }
 function emptyState() {
   if (!can('create')) return '<section class="panel empty"><h2>No servers registered</h2><p>Servers will appear here after an administrator adds them.</p></section>';
@@ -694,14 +741,14 @@ function dashboardModel() {
       : {state:'none',text:'Not scheduled'};
     const progress = deployProgress(server);
     return {
-      id:server.id, worldName:serverLabel(server), endpoint:can('maintenance') ? server.endpoint || (displayStatus === 'checking' ? 'Endpoint pending' : 'Endpoint unavailable') : '',
-      status:displayStatus, statusLabel:displayStatus === 'checking' ? 'Checking' : displayStatus === 'unknown' ? 'Unable to confirm' : server.status === 'attention' ? 'Needs attention' : server.status === 'stopped' ? 'Stopped' : server.status === 'online' ? 'Online' : server.status === 'starting' ? 'Starting' : server.status === 'deleting' ? 'Deleting' : server.status === 'stale' ? 'Stale' : 'Unknown',
+      id:server.id, worldName:serverLabel(server), endpoint:can('maintenance') ? endpointText(server) : '',
+      status:displayStatus, statusLabel:displayStatus === 'checking' ? 'Checking' : displayStatus === 'unknown' ? 'Unknown' : server.status === 'attention' ? 'Needs attention' : server.status === 'stopped' ? 'Stopped' : server.status === 'online' ? 'Online' : server.status === 'starting' ? 'Starting' : server.status === 'deleting' ? 'Deleting' : server.status === 'stale' ? 'Stale' : 'Unknown',
       running, attention, update:can('updateCheck') && server.updateAvailable === true,
-      players, capacity:server.maxPlayers, playersText:`${players == null ? metricText(server, 'players') : number(players)} / ${number(server.maxPlayers)}`,
-      tickText:stopped ? 'Stopped' : value('tickRate') == null ? metricText(server, 'tickRate', ' TPS') : number(value('tickRate'), ' TPS'),
+      players, capacity:server.maxPlayers, playersText:`${players == null ? dashboardMetricText(server, 'players') : number(players)} / ${number(server.maxPlayers)}`,
+      tickText:!hasTick(server) ? null : stopped ? 'Stopped' : value('tickRate') == null ? dashboardMetricText(server, 'tickRate', ' TPS') : number(value('tickRate'), ' TPS'),
       resources:[
-        {label:'Memory',text:memory != null && limit > 0 ? `${number(memory / 1073741824)} / ${number(limit / 1073741824)} GiB` : metricText(server, memory == null ? 'memoryUsedBytes' : 'memoryLimitBytes'),percent:memory != null && limit > 0 ? memory / limit * 100 : null},
-        {label:'CPU',text:cpu == null ? metricText(server, 'cpuPercent') : number(cpu, '%'),percent:cpu},
+        {label:'Memory',text:memory != null && limit > 0 ? `${number(memory / 1073741824)} / ${number(limit / 1073741824)} GiB` : dashboardMetricText(server, memory == null ? 'memoryUsedBytes' : 'memoryLimitBytes'),percent:memory != null && limit > 0 ? memory / limit * 100 : null},
+        {label:'CPU',text:cpu == null ? dashboardMetricText(server, 'cpuPercent') : number(cpu, '%'),percent:cpu},
       ],
       uptime:duration(value('uptimeSeconds')), schedule,
       actions:stopped ? (can('start') ? ['start'] : []) : running ? ['restart','stop'].filter(can) : [],
@@ -729,18 +776,19 @@ function dashboardResources(row) {
   return row.resources.map((resource) => `<div class="console-resource ${resource.percent == null ? 'unavailable' : ''}"><div><span class="console-label">${resource.label}</span><span class="${resource.percent == null ? 'muted' : ''}">${escapeHTML(resource.text)}</span></div>${resource.percent != null ? `<div class="console-bar" aria-hidden="true"><span style="width:${Math.max(0,Math.min(100,resource.percent))}%"></span></div>` : ''}</div>`).join('');
 }
 function dashboardRow(row) {
-  return `<article class="console-row equal-height ${row.attention ? 'attention' : row.status === 'stopped' ? 'stopped' : ''} ${row.deploying ? 'deploying' : ''}" data-server-id="${escapeHTML(row.id)}">
+  return `<article class="console-row equal-height ${row.attention ? 'attention' : row.status === 'stopped' ? 'stopped' : ''} ${row.deploying ? 'deploying' : ''}${row.tickText == null ? ' no-tick' : ''}" data-server-id="${escapeHTML(row.id)}">
     <div class="console-badges">${dashboardBadges(row)}</div>
     <div class="console-world"><h3><a class="console-open" href="#servers/${encodeURIComponent(row.id)}" data-testid="view-server" data-id="${escapeHTML(row.id)}">${escapeHTML(row.worldName)}</a></h3>${row.endpoint ? `<small class="mono">${escapeHTML(row.endpoint)}</small>` : ''}</div>
     <div class="console-status"><span class="status ${escapeHTML(row.status)}">${escapeHTML(row.statusLabel)}</span></div>
-    <div class="console-metrics"><div><span class="console-label">Players</span><strong>${escapeHTML(row.playersText)}</strong></div><div><span class="console-label">Tick rate</span><strong class="${row.tickText === 'Unavailable' ? 'muted' : ''}">${escapeHTML(row.tickText)}</strong></div></div>
+    <div class="console-metrics"><div><span class="console-label">Players</span><strong>${escapeHTML(row.playersText)}</strong></div>${row.tickText == null ? '' : `<div><span class="console-label">Tick rate</span><strong class="${['—','Collecting'].includes(row.tickText) ? 'muted' : ''}">${escapeHTML(row.tickText)}</strong></div>`}</div>
     <div class="console-resources" aria-label="Resources">${dashboardResources(row)}</div>
     ${row.schedule.state !== 'restricted' ? `<div class="console-schedule"><span class="console-label">Next reboot</span><span class="${row.schedule.state !== 'scheduled' ? 'muted' : ''}">${escapeHTML(row.schedule.text)}</span></div>` : '<div></div>'}
     <div class="console-actions">${dashboardActions(row)}</div>
   </article>`;
 }
 function dashboardTable(rows) {
-  return `<div class="table-wrap"><table><thead><tr><th>Name</th><th>Status</th><th>Players</th><th>Tick rate</th><th>Resources</th><th>Uptime</th><th>Actions</th></tr></thead><tbody>${rows.map((row) => `<tr${row.deploying ? ' class="deploying"' : ''}><td><a href="#servers/${encodeURIComponent(row.id)}" data-testid="view-server"><strong>${escapeHTML(row.worldName)}</strong></a>${row.endpoint ? `<small class="mono">${escapeHTML(row.endpoint)}</small>` : ''}${dashboardBadges(row)}</td><td><span class="status ${escapeHTML(row.status)}">${escapeHTML(row.statusLabel)}</span></td><td>${escapeHTML(row.playersText)}</td><td>${escapeHTML(row.tickText)}</td><td>${dashboardResources(row)}</td><td class="mono">${escapeHTML(row.uptime)}</td><td class="actions">${dashboardActions(row)}</td></tr>`).join('')}</tbody></table></div>`;
+  const tick = rows.some((row) => row.tickText != null);
+  return `<div class="table-wrap"><table><thead><tr><th>Name</th><th>Status</th><th>Players</th>${tick ? '<th>Tick rate</th>' : ''}<th>Resources</th><th>Uptime</th><th>Actions</th></tr></thead><tbody>${rows.map((row) => `<tr${row.deploying ? ' class="deploying"' : ''}><td><a href="#servers/${encodeURIComponent(row.id)}" data-testid="view-server"><strong>${escapeHTML(row.worldName)}</strong></a>${row.endpoint ? `<small class="mono">${escapeHTML(row.endpoint)}</small>` : ''}${dashboardBadges(row)}</td><td><span class="status ${escapeHTML(row.status)}">${escapeHTML(row.statusLabel)}</span></td><td>${escapeHTML(row.playersText)}</td>${tick ? `<td>${escapeHTML(row.tickText ?? '')}</td>` : ''}<td>${dashboardResources(row)}</td><td class="mono">${escapeHTML(row.uptime)}</td><td class="actions">${dashboardActions(row)}</td></tr>`).join('')}</tbody></table></div>`;
 }
 function dashboard() {
   const model = dashboardModel(), summary = model.summary;
@@ -748,6 +796,13 @@ function dashboard() {
   const stats = `<div class="stats dashboard-stats">${stat('Registered servers', summary.total, 'server')}${stat('Online', `${summary.online} / ${summary.total}`, 'pulse')}${stat('Players online', playerSummary, 'users')}${summary.incomplete ? '<p class="summary-note">Known players only; some counts are unavailable.</p>' : ''}</div>`;
   if (!state.servers.length) return stats + emptyState();
   return `${stats}<section class="panel dashboard-fleet"><div class="panel-heading"><div><h2>Servers</h2><p>${summary.total} worlds · ${model.view === 'table' ? 'table' : 'row'} view</p></div>${can('create') ? `<button class="primary" data-action="add-server" data-testid="add-server">${icon('plus')}Add server</button>` : ''}</div><div class="toolbar chips console-toolbar" aria-label="Server status filter">${['all','online','attention'].map((filter) => `<button data-action="fleet-filter" data-value="${filter}" data-testid="filter-${filter}" aria-pressed="${model.filter === filter}">${filter === 'attention' ? 'Needs attention' : filter[0].toUpperCase()+filter.slice(1)}</button>`).join('')}<button class="link-button console-view" data-action="dashboard-view" data-value="${model.view === 'table' ? 'rows' : 'table'}">${model.view === 'table' ? 'Row view' : 'Table view'}</button></div>${model.rows.length ? model.view === 'table' ? dashboardTable(model.rows) : `<div class="console-rows">${model.rows.map(dashboardRow).join('')}</div>` : '<p class="no-results">No servers match this filter.</p>'}</section>`;
+}
+// A line breaks when two readings are further apart than a few polling intervals of that metric.
+function chartGapMs(key) {
+  const sources = state.telemetryConfig?.sources;
+  const group = /^(cpu|memory)/.test(key) ? 'resources' : /^disk/.test(key) ? 'disk' : /^(inbound|outbound|network)/.test(key) ? 'network' : /^tick/.test(key) ? 'tick' : key === 'players' ? 'players' : '';
+  const seconds = Number(sources?.[group]?.intervalSeconds);
+  return Math.max(45000, Number.isFinite(seconds) ? seconds * 2500 : 0);
 }
 function chart(key, label, secondaryKey = '', secondaryLabel = '') {
   const points = samples();
@@ -769,7 +824,7 @@ function chart(key, label, secondaryKey = '', secondaryLabel = '') {
       if (!present(point, field)) { previous = null; return ''; }
       const at = timeOf(point, field);
       if (previous === at) return '';
-      const command = previous == null || at - previous > 45000 || at < previous ? 'M' : 'L';
+      const command = previous == null || at - previous > chartGapMs(field) || at < previous ? 'M' : 'L';
       previous = at;
       return `${command}${position(point, field)}`;
     }).join(' ');
@@ -788,10 +843,11 @@ function telemetry() {
   if (!selected) return emptyState();
   const server = {...selected, ...(state.telemetry?.server || state.telemetry?.current || state.telemetry?.latest || {})};
   server.metrics = state.telemetry?.metrics || server.metrics;
+  const tick = hasTick(server);
   const value = (key) => metricValue(server, key);
   const text = (key, suffix = '') => metricText(server, key, suffix);
   const logsAvailable = can('logs') && server.status !== 'stopped';
-  return `<div class="toolbar"><strong>${escapeHTML(serverLabel(server))}</strong><label class="sr-only" for="telemetry-range">Telemetry time range</label><select id="telemetry-range" data-testid="telemetry-range">${[['60s','Last 60 seconds'],['5m','Last 5 minutes'],['1h','Last hour']].map(([value,label]) => `<option value="${value}" ${state.range===value?'selected':''}>${label}</option>`).join('')}</select><button class="primary" data-action="export-telemetry" data-testid="export-telemetry">${icon('download')}Export CSV</button></div><div class="stats">${stat('API-reported players', `${metricText(server, 'players')} / ${number(server.maxPlayers)}`, 'server')}${stat('Tick rate', text('tickRate', ' TPS'), 'pulse')}${stat('API uptime', duration(metricValue(server, 'uptimeSeconds')), 'clock')}${stat('CPU usage', text('cpuPercent', '%'), 'cpu')}</div><div class="split telemetry-layout"><div class="stack"><section class="panel"><div class="panel-heading"><h2>Tick rate</h2>${status(serverStatus(server))}</div>${chart('tickRate','Tick rate (TPS)')}</section><div class="mini-charts"><section class="panel"><div class="panel-heading"><h2>Player count</h2></div>${chart('players','Active players')}</section><section class="panel"><div class="panel-heading"><h2>Network traffic</h2></div>${chart('inboundBytesPerSecond','Inbound (bytes/s)','outboundBytesPerSecond','Outbound (bytes/s)')}</section></div>${connectedPlayers()}</div><div class="stack"><section class="panel"><div class="panel-heading"><h2>Resource usage</h2></div>${resource('CPU cores', text('cpuCores', ' cores'), null)}${resource('CPU limit used', text('cpuPercent', '%'), value('cpuPercent'))}${resource('Memory working set', value('memoryUsedBytes') == null ? text('memoryUsedBytes') : `${bytes(value('memoryUsedBytes'))} / ${bytes(value('memoryLimitBytes'))}`, value('memoryLimitBytes') > 0 && value('memoryUsedBytes') != null ? value('memoryUsedBytes') / value('memoryLimitBytes') * 100 : null)}${resource('Data filesystem', value('diskUsedBytes') == null ? text('diskUsedBytes') : `${bytes(value('diskUsedBytes'))} / ${bytes(value('diskCapacityBytes'))}`, value('diskPercent'))}${resource('Pod network', value('networkBytesPerSecond') == null ? text('networkBytesPerSecond') : `${bytes(value('networkBytesPerSecond'))}/s`, null)}<p class="inline-note">Pod traffic includes all containers. Data filesystem capacity may be shared on kind; it is not the world-save size.</p></section>${telemetryPanels()}</div></div><div class="mini-charts section-gap"><section class="panel"><div class="panel-heading"><h2>CPU history</h2></div>${chart('cpuCores','CPU cores')}</section><section class="panel"><div class="panel-heading"><h2>Memory history</h2></div>${chart('memoryUsedBytes','Memory working set (bytes)')}</section></div>${tickDurations(server)}${metricSources(server)}<section class="panel section-gap metric-definitions"><div class="panel-heading"><h2>Metric definitions</h2></div>${state.telemetry?.metricDefinitions?.length ? `<div class="table-wrap"><table><thead><tr><th>Metric</th><th>Description</th></tr></thead><tbody>${state.telemetry.metricDefinitions.map((definition) => `<tr><td>${escapeHTML(definition.metric)}</td><td>${escapeHTML(definition.description)}</td></tr>`).join('')}</tbody></table></div>` : '<p class="no-results">No metric definitions reported yet.</p>'}</section>${logsAvailable ? `<section class="panel section-gap"><div class="panel-heading"><div><h2>Server logs</h2><p>Latest 100 lines · ${escapeHTML(serverLabel(server))}</p></div><div class="toolbar"><button data-action="refresh-logs" data-testid="refresh-logs">${icon('refresh')}Refresh logs</button><button data-action="export-logs" data-testid="export-logs">${icon('download')}Download logs</button></div></div><div class="toolbar"><label class="search-field">${icon('search')}<span class="sr-only">Search logs</span><input id="log-search" data-testid="log-search" type="search" placeholder="Search these log lines…" value="${escapeHTML(state.logQuery)}"></label></div><pre class="log-console" id="log-output" tabindex="0" aria-label="Server logs" data-testid="log-output">${escapeHTML(filteredLogs() || 'No log lines match this view.')}</pre><p class="inline-note">Unavailable metrics appear as —. Values depend on the server’s telemetry source.</p></section>` : ''}`;
+  return `<div class="toolbar"><strong>${escapeHTML(serverLabel(server))}</strong><label class="sr-only" for="telemetry-range">Telemetry time range</label><select id="telemetry-range" data-testid="telemetry-range">${[['60s','Last 60 seconds'],['5m','Last 5 minutes'],['1h','Last hour']].map(([value,label]) => `<option value="${value}" ${state.range===value?'selected':''}>${label}</option>`).join('')}</select><button class="primary" data-action="export-telemetry" data-testid="export-telemetry">${icon('download')}Export CSV</button></div><div class="stats ${tick ? '' : 'dashboard-stats'}">${stat('API-reported players', `${metricText(server, 'players')} / ${number(server.maxPlayers)}`, 'server')}${tick ? stat('Tick rate', text('tickRate', ' TPS'), 'pulse') : ''}${stat('API uptime', duration(metricValue(server, 'uptimeSeconds')), 'clock')}${stat('CPU usage', text('cpuPercent', '%'), 'cpu')}</div><div class="split telemetry-layout"><div class="stack">${tick ? `<section class="panel"><div class="panel-heading"><h2>Tick rate</h2>${status(serverStatus(server))}</div>${chart('tickRate','Tick rate (TPS)')}</section>` : ''}<div class="mini-charts"><section class="panel"><div class="panel-heading"><h2>Player count</h2></div>${chart('players','Active players')}</section><section class="panel"><div class="panel-heading"><h2>Network traffic</h2></div>${chart('inboundBytesPerSecond','Inbound (bytes/s)','outboundBytesPerSecond','Outbound (bytes/s)')}</section></div>${connectedPlayers()}</div><div class="stack"><section class="panel"><div class="panel-heading"><h2>Resource usage</h2></div>${resource('CPU cores', text('cpuCores', ' cores'), null)}${resource('CPU limit used', text('cpuPercent', '%'), value('cpuPercent'))}${resource('Memory working set', value('memoryUsedBytes') == null ? text('memoryUsedBytes') : `${bytes(value('memoryUsedBytes'))} / ${bytes(value('memoryLimitBytes'))}`, value('memoryLimitBytes') > 0 && value('memoryUsedBytes') != null ? value('memoryUsedBytes') / value('memoryLimitBytes') * 100 : null)}${resource('Data filesystem', value('diskUsedBytes') == null ? text('diskUsedBytes') : `${bytes(value('diskUsedBytes'))} / ${bytes(value('diskCapacityBytes'))}`, value('diskPercent'))}${resource('Pod network', value('networkBytesPerSecond') == null ? text('networkBytesPerSecond') : `${bytes(value('networkBytesPerSecond'))}/s`, null)}<p class="inline-note">Pod traffic includes all containers. Data filesystem capacity may be shared on kind; it is not the world-save size.</p></section>${telemetryPanels()}</div></div><div class="mini-charts section-gap"><section class="panel"><div class="panel-heading"><h2>CPU history</h2></div>${chart('cpuCores','CPU cores')}</section><section class="panel"><div class="panel-heading"><h2>Memory history</h2></div>${chart('memoryUsedBytes','Memory working set (bytes)')}</section></div>${tickDurations(server)}${metricSources(server)}<section class="panel section-gap metric-definitions"><div class="panel-heading"><h2>Metric definitions</h2></div>${state.telemetry?.metricDefinitions?.length ? `<div class="table-wrap"><table><thead><tr><th>Metric</th><th>Description</th></tr></thead><tbody>${state.telemetry.metricDefinitions.filter((definition) => !tickMetricKeys.includes(definition.metric) || tick).map((definition) => `<tr><td>${escapeHTML(definition.metric)}</td><td>${escapeHTML(definition.description)}</td></tr>`).join('')}</tbody></table></div>` : '<p class="no-results">No metric definitions reported yet.</p>'}</section>${logsAvailable ? `<section class="panel section-gap"><div class="panel-heading"><div><h2>Server logs</h2><p>Latest 100 lines · ${escapeHTML(serverLabel(server))}</p></div><div class="toolbar"><button data-action="refresh-logs" data-testid="refresh-logs">${icon('refresh')}Refresh logs</button><button data-action="export-logs" data-testid="export-logs">${icon('download')}Download logs</button></div></div><div class="toolbar"><label class="search-field">${icon('search')}<span class="sr-only">Search logs</span><input id="log-search" data-testid="log-search" type="search" placeholder="Search these log lines…" value="${escapeHTML(state.logQuery)}"></label></div><pre class="log-console" id="log-output" tabindex="0" aria-label="Server logs" data-testid="log-output">${escapeHTML(filteredLogs() || 'No log lines match this view.')}</pre><p class="inline-note">Unavailable metrics appear as —. Values depend on the server’s telemetry source.</p></section>` : ''}`;
 }
 function serverOverview() {
   const selected = selectedServer();
@@ -807,18 +863,18 @@ function serverOverview() {
     can('delete') ? '<div class="action-card"><button class="danger" data-action="delete" data-testid="delete-server">Delete server</button></div>' : '',
   ].filter(Boolean).join('');
   const engine = server.metrics?.engineReady;
-  const evidence = engine ? `<p>Engine readiness: ${escapeHTML(metricValue(server, 'engineReady') === 1 ? 'Ready' : metricValue(server, 'engineReady') === 0 ? 'Not ready' : metricText(server, 'engineReady'))}${engine.reason ? ` · ${escapeHTML(engine.reason)}` : ''}</p>` : '';
+  const evidence = engine && metricValue(server, 'engineReady') != null ? `<p>Engine readiness: ${metricValue(server, 'engineReady') === 1 ? 'Ready' : 'Not ready'}</p>` : '';
   const links = ['telemetry','maintenance','events','reboots']
     .filter((page) => can(page))
     .map((page) => `<a href="${escapeHTML(scopedHash(page, selected.id))}">${pages[page][0]}</a>`)
     .join('');
   const details = can('maintenance') || can('reboots')
-    ? `<section class="panel"><dl class="detail-list">${can('reboots') ? `<div><dt>Next reboot</dt><dd data-testid="overview-next-reboot">${next ? escapeHTML(zonedDate(next.nextRun, state.displayTimezone || 'UTC')) : 'Unavailable'}</dd></div>` : ''}${can('maintenance') ? `<div><dt>Join endpoint</dt><dd class="mono">${escapeHTML(selected.endpoint || 'Unavailable')}${selected.endpoint ? ' <button data-action="copy-endpoint" data-testid="copy-endpoint">Copy endpoint</button>' : ''}</dd></div>` : ''}</dl></section>`
+    ? `<section class="panel"><dl class="detail-list">${can('reboots') ? `<div><dt>Next reboot</dt><dd data-testid="overview-next-reboot">${next ? escapeHTML(zonedDate(next.nextRun, state.displayTimezone || 'UTC')) : state.rebootsAvailable ? 'Not scheduled' : '—'}</dd></div>` : ''}${can('maintenance') ? `<div><dt>Join endpoint</dt><dd class="mono">${escapeHTML(endpointText(selected) || '—')}${selected.endpoint ? ' <button data-action="copy-endpoint" data-testid="copy-endpoint">Copy endpoint</button>' : ''}</dd></div>` : ''}</dl></section>`
     : '';
   const actionPanel = actions && !state.deletions[selected.id] && selected.status !== 'deleting'
     ? `<section class="panel"><div class="panel-heading"><h2>Server actions</h2></div><div class="action-grid">${actions}</div><p class="inline-note">Restart and update actions require confirmation and disconnect active players.</p></section>`
     : '';
-  return `<section class="panel" data-testid="server-overview"><div class="panel-heading"><h2>${escapeHTML(serverLabel(server))}</h2>${status(serverStatus(server))}</div>${evidence}<div class="toolbar">${links}</div><div class="stats">${stat('API-reported players', `${metricText(server, 'players')} / ${number(server.maxPlayers)}`, 'server')}${stat('Tick rate', metricText(server, 'tickRate', ' TPS'), 'pulse')}${stat('Memory working set', metricValue(server, 'memoryUsedBytes') == null ? metricText(server, 'memoryUsedBytes') : bytes(metricValue(server, 'memoryUsedBytes')), 'cpu')}${stat('Memory limit', metricValue(server, 'memoryLimitBytes') == null ? metricText(server, 'memoryLimitBytes') : bytes(metricValue(server, 'memoryLimitBytes')), 'cpu')}</div></section><div class="stack section-gap">${connectedPlayers()}${details}${actionPanel}</div>`;
+  return `<section class="panel" data-testid="server-overview"><div class="panel-heading"><h2>${escapeHTML(serverLabel(server))}</h2>${status(serverStatus(server))}</div>${evidence}<div class="toolbar">${links}</div><div class="stats ${hasTick(server) ? '' : 'dashboard-stats'}">${stat('API-reported players', `${dashboardMetricText(server, 'players')} / ${number(server.maxPlayers)}`, 'server')}${hasTick(server) ? stat('Tick rate', dashboardMetricText(server, 'tickRate', ' TPS'), 'pulse') : ''}${stat('Memory working set', metricValue(server, 'memoryUsedBytes') == null ? dashboardMetricText(server, 'memoryUsedBytes') : bytes(metricValue(server, 'memoryUsedBytes')), 'cpu')}${stat('Memory limit', metricValue(server, 'memoryLimitBytes') == null ? dashboardMetricText(server, 'memoryLimitBytes') : bytes(metricValue(server, 'memoryLimitBytes')), 'cpu')}</div></section><div class="stack section-gap">${connectedPlayers()}${details}${actionPanel}</div>`;
 }
 function connectedPlayers() {
   const data = state.telemetry;
@@ -828,7 +884,7 @@ function connectedPlayers() {
   const key = rosterObservationKey(data);
   const expired = state.rosterObservation === key && Number.isFinite(state.rosterDeadline) ? monotonicNow() >= state.rosterDeadline : (() => {
     const age = Date.now() - Date.parse(reading?.observedAt);
-    return !Number.isFinite(age) || age > 45000 || age < -5000;
+    return !Number.isFinite(age) || age > rosterFreshLimitMs(roster) || age < -5000;
   })();
   const playerField = (value, fallback) => escapeHTML(typeof value === 'string' && value.trim() ? value : fallback);
   let content = '<p class="no-results">Connected players are unavailable.</p>';
@@ -836,7 +892,7 @@ function connectedPlayers() {
     if (reading?.status === 'stale' || (reading?.status === 'available' && expired)) {
       content = '<p class="no-results">Connected players are stale. Refresh telemetry to see the current roster.</p>';
     } else if (reading?.status === 'error') {
-      content = '<p class="no-results">Connected players are unavailable. The latest collection failed.</p>';
+      content = '<p class="no-results">Connected players are unavailable.</p>';
     } else if (reading?.status === 'available' && roster?.status === 'error') {
       content = '<p class="no-results">Connected players are unavailable. The game API returned an invalid roster.</p>';
     } else if (reading?.status === 'available' && roster?.status === 'unavailable') {
@@ -852,12 +908,13 @@ function connectedPlayers() {
   return `<section class="panel" aria-labelledby="connected-players-heading" data-testid="connected-players"><div class="panel-heading"><h2 id="connected-players-heading">Connected players</h2></div>${content}</section>`;
 }
 function tickDurations(server) {
+  if (!hasTick(server)) return '';
   return `<section class="panel section-gap"><div class="panel-heading"><h2>Tick execution duration</h2></div><p class="inline-note">Elapsed time inside UDomGameEngine::Tick, including its world tick. Excludes work outside that call. Each point is a separate measurement window, not a percentile of the selected chart range.</p><div class="stats">${stat('p50 duration', metricText(server, 'tickP50Ms', ' ms'), 'clock')}${stat('p95 duration', metricText(server, 'tickP95Ms', ' ms'), 'clock')}${stat('p99 duration', metricText(server, 'tickP99Ms', ' ms'), 'clock')}${stat('Completed ticks', metricText(server, 'tickSampleCount'), 'pulse')}</div><p class="inline-note">Latest measurement window: ${metricText(server, 'tickWindowSeconds', ' seconds')}.</p>${chart('tickP95Ms', 'p95 tick duration (ms)', 'tickP99Ms', 'p99 tick duration (ms)')}</section>`;
 }
 function filteredLogs() { return state.logs.split('\n').filter((line) => line.toLowerCase().includes(state.logQuery.toLowerCase())).join('\n'); }
 function telemetryPanels() {
   const checks = state.telemetry?.healthChecks || [];
-  return `<section class="panel"><div class="panel-heading"><h2>Health checks</h2></div>${checks.length ? `<dl class="detail-list">${checks.map((check) => `<div><dt>${escapeHTML(check.name)}</dt><dd>${status(String(check.status || 'unknown').toLowerCase())}<small class="check-time">${escapeHTML(date(check.at))}</small></dd></div>`).join('')}</dl>` : '<p class="no-results">No health checks reported yet.</p>'}</section>`;
+  return `<section class="panel"><div class="panel-heading"><h2>Health checks</h2></div>${checks.length ? `<dl class="detail-list">${checks.map((check) => `<div><dt>${escapeHTML(check.name)}</dt><dd>${status(String(check.status || 'unknown').toLowerCase())}<small class="check-time">${escapeHTML(date(check.at))}</small>${check.reason ? `<small class="check-reason">${escapeHTML(check.reason)}</small>` : ''}</dd></div>`).join('')}</dl>` : '<p class="no-results">No health checks reported yet.</p>'}</section>`;
 }
 function eventsPage() {
   if (!can('events')) return dashboard();
@@ -883,7 +940,7 @@ function maintenance() {
     : `<div class="action-card"><button class="danger" data-action="restart" data-testid="restart-server">${icon('refresh')}Restart server</button><p>Disconnects active players and restarts this world.</p></div><div class="action-card"><button data-action="update" data-testid="update-image">${icon('download')}Update image</button><p>Choose a container image tag and roll out the update.</p></div><div class="action-card"><button data-action="check-update" data-testid="check-update">${icon('search')}Check update</button><p>Compare the current image with the desired image.</p></div><div class="action-card"><button class="danger" data-action="stop" data-testid="stop-server">${icon('warning')}Stop server</button><p>Disconnects active players. World data and this inventory row stay.</p></div>`;
   if (!parked && can('restore-server')) lifecycleActions += `<div class="action-card"><button data-action="restore-server" data-testid="restore-server">${icon('upload')}Restore</button><p>Restore a tracked backup or custom .sav into this world.</p></div>`;
   const healthStatus = serverStatus(server);
-  return `${banner}<div class="split"><section class="panel"><div class="panel-heading"><div><h2>Server lifecycle</h2><p>${escapeHTML(serverLabel(server))}</p></div>${status(healthStatus)}</div><dl class="detail-list lifecycle-details"><div><dt>Current image</dt><dd class="mono">${escapeHTML(server.currentImage || 'Not reported')}</dd></div><div><dt>Desired image</dt><dd class="mono">${escapeHTML(server.desiredImage || 'Not configured')}</dd></div><div><dt>API uptime</dt><dd>${duration(metricValue(server, 'uptimeSeconds'))}</dd></div><div><dt>Last restart</dt><dd>${escapeHTML(date(server.lastRestart))}</dd></div><div><dt>Namespace</dt><dd class="mono">${escapeHTML(server.namespace || '—')}</dd></div><div><dt>Connection endpoint</dt><dd class="mono">${escapeHTML(server.endpoint || 'Endpoint unavailable. Ask your cluster operator for the server address and game port.')}</dd></div><div><dt>Memory limit</dt><dd>${server.memoryLimitMiB ? `${number(server.memoryLimitMiB)} MiB` : 'Not recorded'}</dd></div><div><dt>CPU limit</dt><dd>${server.cpuLimitMillis ? `${number(server.cpuLimitMillis)} millicores` : 'Not recorded'}</dd></div><div><dt>Player limit</dt><dd>${number(server.maxPlayers)}</dd></div><div><dt>Creator</dt><dd>${escapeHTML(server.name || 'Not recorded')}</dd></div><div><dt>Stable server ID</dt><dd class="mono">${escapeHTML(server.id)}</dd></div></dl><div class="action-grid">${lifecycleActions}</div><p class="inline-note">Stop, start, restart, update, and restore require confirmation.</p></section><div class="stack"><section class="panel"><div class="panel-heading"><h2>Readiness</h2></div><dl class="detail-list"><div><dt>Server health</dt><dd>${status(healthStatus)}</dd></div><div><dt>Players connected</dt><dd>${metricText(server, 'players')} / ${number(server.maxPlayers)}</dd></div><div><dt>Image status</dt><dd class="${server.updateAvailable ? 'amber' : ''}">${server.updateAvailable ? 'Update available' : 'No update reported'}</dd></div><div><dt>Last seen</dt><dd>${escapeHTML(date(server.lastSeen))}</dd></div></dl><p class="inline-note">Choose a quiet moment for maintenance. Active players will be disconnected.</p></section><section class="panel"><div class="panel-heading"><h2>Recent changes</h2></div>${changes.length ? `<div class="table-wrap"><table><thead><tr><th>Change</th><th>Time</th></tr></thead><tbody>${changes.slice(0,4).map((event) => `<tr><td>${escapeHTML(event.message)}</td><td title="${escapeHTML(date(event.timestamp))}">${escapeHTML(date(event.timestamp, true))}</td></tr>`).join('')}</tbody></table></div>` : '<p class="no-results">No changes recorded for this server.</p>'}</section></div></div><section class="panel section-gap"><div class="panel-heading"><h2>Audit trail</h2><button class="link-button" data-action="view-events" data-testid="maintenance-events">View events ${icon('arrow')}</button></div>${eventTable(activity.slice(0,10))}<p class="inline-note">Recorded server events. Actor identity is not reported by this source.</p></section>`;
+  return `${banner}<div class="split"><section class="panel"><div class="panel-heading"><div><h2>Server lifecycle</h2><p>${escapeHTML(serverLabel(server))}</p></div>${status(healthStatus)}</div><dl class="detail-list lifecycle-details"><div><dt>Current image</dt><dd class="mono">${escapeHTML(server.currentImage || 'Not reported')}</dd></div><div><dt>Desired image</dt><dd class="mono">${escapeHTML(server.desiredImage || 'Not configured')}</dd></div><div><dt>API uptime</dt><dd>${duration(metricValue(server, 'uptimeSeconds'))}</dd></div><div><dt>Last restart</dt><dd>${escapeHTML(date(server.lastRestart))}</dd></div><div><dt>Namespace</dt><dd class="mono">${escapeHTML(server.namespace || '—')}</dd></div><div><dt>Connection endpoint</dt><dd class="mono">${escapeHTML(endpointText(server) || '—')}</dd></div><div><dt>Memory limit</dt><dd>${server.memoryLimitMiB ? `${number(server.memoryLimitMiB)} MiB` : 'Not recorded'}</dd></div><div><dt>CPU limit</dt><dd>${server.cpuLimitMillis ? `${number(server.cpuLimitMillis)} millicores` : 'Not recorded'}</dd></div><div><dt>Player limit</dt><dd>${number(server.maxPlayers)}</dd></div><div><dt>Creator</dt><dd>${escapeHTML(server.name || 'Not recorded')}</dd></div><div><dt>Stable server ID</dt><dd class="mono">${escapeHTML(server.id)}</dd></div></dl><div class="action-grid">${lifecycleActions}</div><p class="inline-note">Stop, start, restart, update, and restore require confirmation.</p></section><div class="stack"><section class="panel"><div class="panel-heading"><h2>Readiness</h2></div><dl class="detail-list"><div><dt>Server health</dt><dd>${status(healthStatus)}</dd></div><div><dt>Players connected</dt><dd>${dashboardMetricText(server, 'players')} / ${number(server.maxPlayers)}</dd></div><div><dt>Image status</dt><dd class="${server.updateAvailable ? 'amber' : ''}">${server.updateAvailable ? 'Update available' : 'No update reported'}</dd></div><div><dt>Last seen</dt><dd>${escapeHTML(date(server.lastSeen))}</dd></div></dl><p class="inline-note">Choose a quiet moment for maintenance. Active players will be disconnected.</p></section><section class="panel"><div class="panel-heading"><h2>Recent changes</h2></div>${changes.length ? `<div class="table-wrap"><table><thead><tr><th>Change</th><th>Time</th></tr></thead><tbody>${changes.slice(0,4).map((event) => `<tr><td>${escapeHTML(event.message)}</td><td title="${escapeHTML(date(event.timestamp))}">${escapeHTML(date(event.timestamp, true))}</td></tr>`).join('')}</tbody></table></div>` : '<p class="no-results">No changes recorded for this server.</p>'}</section></div></div><section class="panel section-gap"><div class="panel-heading"><h2>Audit trail</h2><button class="link-button" data-action="view-events" data-testid="maintenance-events">View events ${icon('arrow')}</button></div>${eventTable(activity.slice(0,10))}<p class="inline-note">Recorded server events. Actor identity is not reported by this source.</p></section>`;
 }
 function backupServer(id) { return state.servers.find((server) => server.id === id); }
 function backupProfile(id) { return state.backupProfiles.find((profile) => profile.id === id); }
@@ -1347,6 +1404,7 @@ async function refresh() {
     selectedId = selectedServer()?.id;
     $('#cluster-name').textContent = typeof bootstrap.cluster === 'string' ? bootstrap.cluster : bootstrap.cluster?.name || bootstrap.clusterName || 'Local cluster';
     state.mode = bootstrap.mode;
+    state.telemetryConfig = bootstrap.telemetryConfig || null;
     $('#environment').textContent = bootstrap.mode === 'demo' ? 'Demo mode' : 'Kubernetes';
     const server = selectedServer();
     const eventParams = state.page === 'events' ? {limit:100, offset:0} : {limit:50, preview:true, serverId:state.page === 'maintenance' ? server?.id : state.serverId};

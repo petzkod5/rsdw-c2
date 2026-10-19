@@ -18,10 +18,9 @@ import (
 )
 
 const (
-	telemetryCommandTimeout = 1500 * time.Millisecond
-	maxPlayerResponseBytes  = 256 << 10
-	maxPlayerRosterEntries  = 256
-	maxPlayerFieldBytes     = 4096
+	maxPlayerResponseBytes = 256 << 10
+	maxPlayerRosterEntries = 256
+	maxPlayerFieldBytes    = 4096
 )
 
 type kubeMetadata struct {
@@ -99,8 +98,17 @@ type podTarget struct {
 	ready       bool
 }
 
+// telemetryConfig returns the polling configuration, falling back to the
+// defaults for an orchestrator that was built without one.
+func (k *kubeOrchestrator) telemetryConfig() TelemetryConfig {
+	if k.telemetry.LivenessInterval == 0 {
+		return defaultTelemetryConfig()
+	}
+	return k.telemetry
+}
+
 func (k *kubeOrchestrator) kubeJSON(ctx context.Context, target any, args ...string) error {
-	ctx, cancel := context.WithTimeout(ctx, telemetryCommandTimeout)
+	ctx, cancel := context.WithTimeout(ctx, k.telemetryConfig().KubeTimeout)
 	defer cancel()
 	data, err := k.runner.Run(ctx, k.kubectl, args...)
 	if err != nil {
@@ -146,7 +154,7 @@ type telemetryNode struct {
 // leaves the endpoint unset, matching the other best-effort telemetry
 // sources in this file.
 func (k *kubeOrchestrator) resolveEndpoint(ctx context.Context, server Server) string {
-	ctx, cancel := context.WithTimeout(ctx, telemetryCommandTimeout)
+	ctx, cancel := context.WithTimeout(ctx, 2*k.telemetryConfig().KubeTimeout)
 	defer cancel()
 	var service telemetryService
 	if err := k.kubeJSON(ctx, &service, "-n", server.Namespace, "get", "service", deploymentName(server.Release), "-o", "json"); err != nil {
@@ -223,7 +231,7 @@ func (k *kubeOrchestrator) resolveEndpoint(ctx context.Context, server Server) s
 }
 
 func (k *kubeOrchestrator) resolvePod(ctx context.Context, server Server) (podTarget, Status, error) {
-	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, 3*k.telemetryConfig().KubeTimeout)
 	defer cancel()
 	var deployment struct {
 		Metadata kubeMetadata `json:"metadata"`
@@ -324,8 +332,8 @@ func (k *kubeOrchestrator) resolvePod(ctx context.Context, server Server) (podTa
 	return target, StatusStarting, nil
 }
 
-func (k *kubeOrchestrator) podExec(ctx context.Context, target podTarget, args ...string) ([]byte, error) {
-	ctx, cancel := context.WithTimeout(ctx, telemetryCommandTimeout)
+func (k *kubeOrchestrator) podExec(ctx context.Context, target podTarget, timeout time.Duration, args ...string) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	container := target.container.Name
 	if container == "" {
@@ -356,135 +364,24 @@ func (k *kubeOrchestrator) podGameAPI(ctx context.Context, target podTarget, end
 	if endpoint != "health" && endpoint != "players" && endpoint != "metrics" {
 		return nil, errors.New("unsupported game API endpoint")
 	}
+	cfg := k.telemetryConfig()
+	timeout := cfg.ExecTimeout
+	if endpoint == "health" {
+		timeout = cfg.HealthTimeout
+	}
 	limit := ""
 	if endpoint == "players" {
 		limit = fmt.Sprintf(" --max-filesize %d", maxPlayerResponseBytes)
 	}
-	script := fmt.Sprintf("curl -fsS --max-time 3%s -H \"Authorization: Bearer $(cat /run/rsdwapi/token)\" http://127.0.0.1:%d/api/%s", limit, port, endpoint)
-	return k.podExec(ctx, target, "sh", "-ec", script)
+	// curl gives up a second before the exec deadline so a slow game API
+	// cannot leave a process behind after kubectl has stopped waiting.
+	maxTime := max(1, int(timeout.Seconds())-1)
+	script := fmt.Sprintf("curl -fsS --max-time %d%s -H \"Authorization: Bearer $(cat /run/rsdwapi/token)\" http://127.0.0.1:%d/api/%s", maxTime, limit, port, endpoint)
+	return k.podExec(ctx, target, timeout, "sh", "-ec", script)
 }
-
-var resourceKeys = []string{"cpuCores", "cpuPercent", "memoryUsedBytes"}
-var networkKeys = []string{"inboundBytesPerSecond", "outboundBytesPerSecond", "networkBytesPerSecond"}
-var diskKeys = []string{"diskUsedBytes", "diskCapacityBytes", "diskPercent"}
 
 var errScaledZero = errors.New("deployment is scaled to zero")
 var errNoActivePod = errors.New("no active owned Pod")
-
-func (k *kubeOrchestrator) collectObservation(ctx context.Context, server Server, previous *networkCounters) observation {
-	ctx, cancel := context.WithTimeout(ctx, 12*time.Second)
-	defer cancel()
-	result := observation{metrics: emptyMetrics(), playerRoster: unavailableRoster("Player roster was not collected"), status: StatusUnknown}
-	target, status, err := k.resolvePod(ctx, server)
-	result.status = status
-	if err != nil {
-		if errors.Is(err, errScaledZero) || errors.Is(err, errNoActivePod) {
-			result.health = "unhealthy"
-		}
-		for key := range result.metrics {
-			failReadings(result.metrics, []string{key}, "unavailable", "Pod discovery: "+err.Error(), nil)
-		}
-		return result
-	}
-	result.image = target.container.Image
-	result.endpoint = k.resolveEndpoint(ctx, server)
-	at := time.Now().UTC()
-	for _, item := range []struct{ resource, key string }{{"cpu", "cpuLimitCores"}, {"memory", "memoryLimitBytes"}} {
-		raw := target.container.Resources.Limits[item.resource]
-		if raw == "" {
-			failReadings(result.metrics, []string{item.key}, "unavailable", "Container has no explicit "+item.resource+" limit", &at)
-			continue
-		}
-		value, err := quantityNumber(raw)
-		if err != nil {
-			failReadings(result.metrics, []string{item.key}, "error", "Invalid container limit", &at)
-			continue
-		}
-		if value == 0 {
-			failReadings(result.metrics, []string{item.key}, "unavailable", "Container has no effective "+item.resource+" limit", &at)
-			continue
-		}
-		setReading(result.metrics, item.key, value, at)
-	}
-	if target.containerID == "" || target.startedAt.IsZero() {
-		result.health = "unhealthy"
-		for key, reading := range result.metrics {
-			if reading.Status == "unavailable" && key != "cpuLimitCores" && key != "memoryLimitBytes" {
-				failReadings(result.metrics, []string{key}, "unavailable", "Server container is not running", nil)
-			}
-		}
-		return result
-	}
-	deadline, _ := ctx.Deadline()
-	sourceCtx, cancelSources := context.WithDeadline(ctx, deadline.Add(-telemetryCommandTimeout))
-	defer cancelSources()
-	k.collectResources(sourceCtx, target, result.metrics)
-	result.playerRoster = k.collectGame(sourceCtx, target, result.metrics)
-	k.collectDisk(sourceCtx, target, result.metrics)
-	if target.pod.Spec.HostNetwork {
-		failReadings(result.metrics, networkKeys, "unsupported", "Host-network counters cannot be attributed to this Pod", nil)
-	} else {
-		data, err := k.podExec(sourceCtx, target, "cat", "/proc/net/dev")
-		at = time.Now().UTC()
-		if err != nil {
-			failReadings(result.metrics, networkKeys, "error", "Network counters: "+err.Error(), &at)
-		} else {
-			counters, err := parseNetwork(data, target.pod.Metadata.UID+"/"+target.containerID, at)
-			if err != nil {
-				failReadings(result.metrics, networkKeys, "error", err.Error(), &at)
-			} else {
-				result.network = &counters
-				applyNetwork(result.metrics, previous, counters)
-			}
-		}
-	}
-	k.collectTicks(sourceCtx, target, result.metrics)
-	// kubectl exec pins a name, not a UID. Discard a collection spanning replacement.
-	var after telemetryPod
-	if err := k.kubeJSON(ctx, &after, "-n", target.pod.Metadata.Namespace, "get", "pod", target.pod.Metadata.Name, "-o", "json"); err != nil || !sameContainer(target, after) {
-		reason := "Pod or server container changed during collection"
-		if err != nil {
-			reason = "Pod identity verification failed: " + err.Error()
-		}
-		for key := range result.metrics {
-			failReadings(result.metrics, []string{key}, "unavailable", reason, nil)
-		}
-		result.network = nil
-		result.playerRoster = unavailableRoster("Pod identity verification failed")
-		result.image = ""
-		result.status = StatusUnknown
-		return result
-	}
-	for _, current := range after.Status.ContainerStatuses {
-		if current.Name == "server" {
-			target.ready = current.Ready
-		}
-	}
-	podReady := false
-	for _, condition := range after.Status.Conditions {
-		if condition.Type == "Ready" {
-			podReady = condition.Status == "True"
-			break
-		}
-	}
-	if ready := result.metrics["engineReady"]; ready.Value != nil {
-		result.health = "unhealthy"
-		if *ready.Value == 1 && target.ready && podReady {
-			result.health = "healthy"
-			result.status = StatusOnline
-		} else {
-			result.status = StatusStarting
-		}
-	} else if result.status == StatusOnline {
-		result.status = StatusAttention
-	}
-	if !target.ready || !podReady {
-		result.health = "unhealthy"
-	}
-	result.runtime, result.runtimeStarted = target.pod.Metadata.UID+"/"+target.containerID, target.startedAt
-	result.restartOperation = target.pod.Metadata.Annotations[restartAnnotation]
-	return result
-}
 
 func sameContainer(target podTarget, pod telemetryPod) bool {
 	if pod.Metadata.UID != target.pod.Metadata.UID || pod.Metadata.DeletionTimestamp != nil || pod.Status.Phase != "Running" {
@@ -517,7 +414,10 @@ func quantityNumber(raw string) (float64, error) {
 	return value, nil
 }
 
-func (k *kubeOrchestrator) collectResources(ctx context.Context, target podTarget, metrics map[string]MetricReading) {
+// collectResources reads CPU and memory from the Metrics API. maxAge is how
+// old the Metrics API sample may be; it follows the polling interval because
+// metrics-server publishes a new sample at most once per scrape.
+func (k *kubeOrchestrator) collectResources(ctx context.Context, target podTarget, metrics map[string]MetricReading, maxAge time.Duration) {
 	path := "/apis/metrics.k8s.io/v1beta1/namespaces/" + url.PathEscape(target.pod.Metadata.Namespace) + "/pods/" + url.PathEscape(target.pod.Metadata.Name)
 	var payload struct {
 		Metadata   kubeMetadata `json:"metadata"`
@@ -543,8 +443,8 @@ func (k *kubeOrchestrator) collectResources(ctx context.Context, target podTarge
 		return
 	}
 	at := payload.Timestamp
-	if now.Sub(at) > telemetryMaxAge {
-		failReadings(metrics, resourceKeys, "stale", "Metrics API observation is older than 45 seconds", &at)
+	if now.Sub(at) > maxAge {
+		failReadings(metrics, resourceKeys, "stale", "Metrics API observation is older than "+maxAge.String(), &at)
 		return
 	}
 	if at.Add(-window).Before(target.startedAt) {
@@ -583,69 +483,66 @@ func (k *kubeOrchestrator) collectResources(ctx context.Context, target podTarge
 	}
 }
 
-func (k *kubeOrchestrator) collectGame(ctx context.Context, target podTarget, metrics map[string]MetricReading) PlayerRoster {
-	roster := unavailableRoster("Player roster was not collected")
-	for _, endpoint := range []string{"health", "players"} {
-		keys := []string{"engineReady", "uptimeSeconds"}
-		if endpoint == "players" {
-			keys = []string{"players"}
-		}
-		data, err := k.podGameAPI(ctx, target, endpoint)
-		at := time.Now().UTC()
-		if err != nil {
-			failReadings(metrics, keys, "error", "Game API "+endpoint+": "+err.Error(), &at)
-			if endpoint == "players" {
-				roster = unavailableRoster("The game API player roster could not be collected")
-			}
-			continue
-		}
-		if endpoint == "health" {
-			var payload struct {
-				EngineReady json.RawMessage `json:"engineReady"`
-				Uptime      json.RawMessage `json:"uptimeSeconds"`
-			}
-			if json.Unmarshal(data, &payload) != nil {
-				failReadings(metrics, keys, "error", "Invalid health payload", &at)
-				continue
-			}
-			var readyValue *bool
-			if json.Unmarshal(payload.EngineReady, &readyValue) != nil || readyValue == nil {
-				failReadings(metrics, []string{"engineReady"}, "error", "Invalid or missing engineReady", &at)
-			} else {
-				ready := 0.0
-				if *readyValue {
-					ready = 1
-				}
-				setReading(metrics, "engineReady", ready, at)
-			}
-			var uptime *float64
-			if json.Unmarshal(payload.Uptime, &uptime) != nil || uptime == nil {
-				failReadings(metrics, []string{"uptimeSeconds"}, "error", "Invalid or missing uptimeSeconds", &at)
-			} else {
-				setReading(metrics, "uptimeSeconds", *uptime, at)
-			}
-		} else {
-			if len(data) > maxPlayerResponseBytes {
-				failReadings(metrics, keys, "error", "Game API players response exceeded the size limit", &at)
-				roster = errorRoster("The game API player roster exceeded the size limit")
-				continue
-			}
-			var payload struct {
-				Count   *float64        `json:"count"`
-				Players json.RawMessage `json:"players"`
-			}
-			if json.Unmarshal(data, &payload) != nil || payload.Count == nil || math.Trunc(*payload.Count) != *payload.Count || *payload.Count > float64(math.MaxInt32) {
-				failReadings(metrics, keys, "error", "Invalid or missing player count", &at)
-				roster = unavailableRoster("The game API player count was not available")
-			} else {
-				setReading(metrics, "players", *payload.Count, at)
-				if metrics["players"].Status == "available" {
-					roster = decodePlayerRoster(payload.Players)
-				}
-			}
-		}
+// applyHealth records the /api/health probe. Failures are recorded on the
+// engineReady and uptimeSeconds readings only; the liveness tier decides what
+// they mean for status.
+func applyHealth(metrics map[string]MetricReading, data []byte, probeErr error, at time.Time) {
+	keys := []string{"engineReady", "uptimeSeconds"}
+	if probeErr != nil {
+		failReadings(metrics, keys, "error", "Game API health: "+probeErr.Error(), &at)
+		return
 	}
-	return roster
+	var payload struct {
+		EngineReady json.RawMessage `json:"engineReady"`
+		Uptime      json.RawMessage `json:"uptimeSeconds"`
+	}
+	if json.Unmarshal(data, &payload) != nil {
+		failReadings(metrics, keys, "error", "Invalid health payload", &at)
+		return
+	}
+	var readyValue *bool
+	if json.Unmarshal(payload.EngineReady, &readyValue) != nil || readyValue == nil {
+		failReadings(metrics, []string{"engineReady"}, "error", "Invalid or missing engineReady", &at)
+	} else {
+		ready := 0.0
+		if *readyValue {
+			ready = 1
+		}
+		setReading(metrics, "engineReady", ready, at)
+	}
+	var uptime *float64
+	if json.Unmarshal(payload.Uptime, &uptime) != nil || uptime == nil {
+		failReadings(metrics, []string{"uptimeSeconds"}, "error", "Invalid or missing uptimeSeconds", &at)
+	} else {
+		setReading(metrics, "uptimeSeconds", *uptime, at)
+	}
+}
+
+func (k *kubeOrchestrator) collectPlayers(ctx context.Context, target podTarget, metrics map[string]MetricReading) PlayerRoster {
+	keys := []string{"players"}
+	data, err := k.podGameAPI(ctx, target, "players")
+	at := time.Now().UTC()
+	if err != nil {
+		failReadings(metrics, keys, "error", "Game API players: "+err.Error(), &at)
+		return unavailableRoster("The game API player roster could not be collected")
+	}
+	if len(data) > maxPlayerResponseBytes {
+		failReadings(metrics, keys, "error", "Game API players response exceeded the size limit", &at)
+		return errorRoster("The game API player roster exceeded the size limit")
+	}
+	var payload struct {
+		Count   *float64        `json:"count"`
+		Players json.RawMessage `json:"players"`
+	}
+	if json.Unmarshal(data, &payload) != nil || payload.Count == nil || math.Trunc(*payload.Count) != *payload.Count || *payload.Count > float64(math.MaxInt32) {
+		failReadings(metrics, keys, "error", "Invalid or missing player count", &at)
+		return unavailableRoster("The game API player count was not available")
+	}
+	setReading(metrics, "players", *payload.Count, at)
+	if metrics["players"].Status != "available" {
+		return unavailableRoster("The game API player count was not available")
+	}
+	return decodePlayerRoster(payload.Players)
 }
 
 func decodePlayerRoster(data json.RawMessage) PlayerRoster {
@@ -770,6 +667,26 @@ func applyTicks(metrics map[string]MetricReading, data []byte, now time.Time, tr
 	}
 }
 
+func (k *kubeOrchestrator) collectNetwork(ctx context.Context, target podTarget, metrics map[string]MetricReading, previous *networkCounters, maxElapsed time.Duration) *networkCounters {
+	if target.pod.Spec.HostNetwork {
+		failReadings(metrics, networkKeys, "unsupported", "Host-network counters cannot be attributed to this Pod", nil)
+		return nil
+	}
+	data, err := k.podExec(ctx, target, k.telemetryConfig().ExecTimeout, "cat", "/proc/net/dev")
+	at := time.Now().UTC()
+	if err != nil {
+		failReadings(metrics, networkKeys, "error", "Network counters: "+err.Error(), &at)
+		return nil
+	}
+	counters, err := parseNetwork(data, target.pod.Metadata.UID+"/"+target.containerID, at)
+	if err != nil {
+		failReadings(metrics, networkKeys, "error", err.Error(), &at)
+		return nil
+	}
+	applyNetwork(metrics, previous, counters, maxElapsed)
+	return &counters
+}
+
 func (k *kubeOrchestrator) collectDisk(ctx context.Context, target podTarget, metrics map[string]MetricReading) {
 	mount := ""
 	count := 0
@@ -783,7 +700,7 @@ func (k *kubeOrchestrator) collectDisk(ctx context.Context, target podTarget, me
 		failReadings(metrics, diskKeys, "unavailable", "Expected one absolute data volume mount", nil)
 		return
 	}
-	data, err := k.podExec(ctx, target, "env", "LC_ALL=C", "df", "-Pk", "--", mount)
+	data, err := k.podExec(ctx, target, k.telemetryConfig().ExecTimeout, "env", "LC_ALL=C", "df", "-Pk", "--", mount)
 	at := time.Now().UTC()
 	if err != nil {
 		failReadings(metrics, diskKeys, "error", "Data filesystem: "+err.Error(), &at)
@@ -859,13 +776,15 @@ func parseNetwork(data []byte, identity string, at time.Time) (networkCounters, 
 	return result, nil
 }
 
-func applyNetwork(metrics map[string]MetricReading, previous *networkCounters, current networkCounters) {
+// applyNetwork turns two counter samples into rates. maxElapsed is the longest
+// gap between samples that still gives a meaningful rate.
+func applyNetwork(metrics map[string]MetricReading, previous *networkCounters, current networkCounters, maxElapsed time.Duration) {
 	reason := "Waiting for a second counter sample"
 	if previous != nil {
 		elapsed := current.at.Sub(previous.at).Seconds()
 		if previous.identity != current.identity {
 			reason = "Pod or server container changed"
-		} else if elapsed <= 0 || elapsed > telemetryMaxAge.Seconds() {
+		} else if elapsed <= 0 || elapsed > maxElapsed.Seconds() {
 			reason = "Counter sampling interval is invalid or stale"
 		} else if len(previous.interfaces) != len(current.interfaces) {
 			reason = "Pod network interfaces changed"

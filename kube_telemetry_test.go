@@ -48,6 +48,7 @@ func (r *deadlineRunner) Run(ctx context.Context, name string, args ...string) (
 }
 
 func TestSourceTimeoutPreservesOtherMetrics(t *testing.T) {
+	t.Setenv("RSDW_TICK_METRICS", "true")
 	for _, tc := range []struct{ command, key, healthy string }{
 		{"get --raw", "cpuCores", "players"},
 		{"/api/health", "engineReady", "players"},
@@ -62,6 +63,10 @@ func TestSourceTimeoutPreservesOtherMetrics(t *testing.T) {
 			k, base, server := collectorFixture()
 			runner := &deadlineRunner{base: base, block: tc.command}
 			k.runner = runner
+			// A blocked source waits out its own timeout; keep them short so
+			// every other source still fits in the test deadline.
+			k.telemetry = defaultTelemetryConfig()
+			k.telemetry.KubeTimeout, k.telemetry.HealthTimeout, k.telemetry.ExecTimeout = 300*time.Millisecond, 300*time.Millisecond, 300*time.Millisecond
 			ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
 			defer cancel()
 			got := k.collectObservation(ctx, server, nil)
@@ -167,6 +172,7 @@ func expectMetric(t *testing.T, metrics map[string]MetricReading, key, status st
 func number(value float64) *float64 { return &value }
 
 func TestCollectRealSourceContract(t *testing.T) {
+	t.Setenv("RSDW_TICK_METRICS", "true")
 	k, runner, server := collectorFixture()
 	observed := k.collectObservation(context.Background(), server, nil)
 	if observed.status != StatusOnline || observed.image != "example/server:1" {
@@ -477,13 +483,13 @@ func TestNetworkRates(t *testing.T) {
 	before, _ := parseNetwork([]byte(netFixture(100, 200)), "pod/container", now.Add(-15*time.Second))
 	current, _ := parseNetwork([]byte(netFixture(400, 800)), "pod/container", now)
 	metrics := emptyMetrics()
-	applyNetwork(metrics, &before, current)
+	applyNetwork(metrics, &before, current, telemetryMaxAge)
 	for key, value := range map[string]float64{"inboundBytesPerSecond": 20, "outboundBytesPerSecond": 40, "networkBytesPerSecond": 60} {
 		expectMetric(t, metrics, key, "available", number(value))
 	}
 	zero := before
 	zero.at = now
-	applyNetwork(metrics, &before, zero)
+	applyNetwork(metrics, &before, zero, telemetryMaxAge)
 	expectMetric(t, metrics, "networkBytesPerSecond", "available", number(0))
 	for _, kind := range []string{"pod", "reset", "interfaces", "time", "stale"} {
 		changed, _ := parseNetwork([]byte(netFixture(400, 800)), "pod/container", now)
@@ -499,7 +505,7 @@ func TestNetworkRates(t *testing.T) {
 		case "stale":
 			changed.at = now.Add(time.Minute)
 		}
-		applyNetwork(metrics, &before, changed)
+		applyNetwork(metrics, &before, changed, telemetryMaxAge)
 		expectMetric(t, metrics, "networkBytesPerSecond", "warming_up", nil)
 	}
 }
@@ -580,6 +586,7 @@ func TestLocalKernelTelemetryParsers(t *testing.T) {
 }
 
 func TestTickSnapshotValidation(t *testing.T) {
+	t.Setenv("RSDW_TICK_METRICS", "true")
 	now := time.Now().UTC().Truncate(time.Millisecond)
 	for _, tc := range []struct {
 		name, old, replacement, status string
@@ -647,6 +654,7 @@ func TestTickSnapshotValidation(t *testing.T) {
 }
 
 func TestTickSnapshotMissingFields(t *testing.T) {
+	t.Setenv("RSDW_TICK_METRICS", "true")
 	now := time.Now().UTC()
 	for _, path := range []string{"schemaVersion", "tick", "tick.status", "tick.source", "tick.scope", "tick.windowSeconds", "tick.sampleCount", "tick.lastSampleAgeSeconds", "tick.observedAtUnixMs", "tick.rateHz", "tick.executionMs", "tick.executionMs.p50", "tick.executionMs.p95", "tick.executionMs.p99"} {
 		for _, null := range []bool{false, true} {
@@ -713,6 +721,7 @@ func TestTickDistributionBounds(t *testing.T) {
 }
 
 func TestTickTimestampAndTransport(t *testing.T) {
+	t.Setenv("RSDW_TICK_METRICS", "true")
 	now := time.Now().UTC().Truncate(time.Millisecond)
 	for _, tc := range []struct {
 		name        string
@@ -747,6 +756,7 @@ func TestTickTimestampAndTransport(t *testing.T) {
 }
 
 func TestTickSourceFailureIsIndependent(t *testing.T) {
+	t.Setenv("RSDW_TICK_METRICS", "true")
 	for _, payload := range []string{"404", "null", "{}", "not JSON"} {
 		t.Run(payload, func(t *testing.T) {
 			k, runner, server := collectorFixture()
