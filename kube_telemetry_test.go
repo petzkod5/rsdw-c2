@@ -48,6 +48,7 @@ func (r *deadlineRunner) Run(ctx context.Context, name string, args ...string) (
 }
 
 func TestSourceTimeoutPreservesOtherMetrics(t *testing.T) {
+	t.Setenv("RSDW_TICK_METRICS", "true")
 	for _, tc := range []struct{ command, key, healthy string }{
 		{"get --raw", "cpuCores", "players"},
 		{"/api/health", "engineReady", "players"},
@@ -171,6 +172,7 @@ func expectMetric(t *testing.T, metrics map[string]MetricReading, key, status st
 func number(value float64) *float64 { return &value }
 
 func TestCollectRealSourceContract(t *testing.T) {
+	t.Setenv("RSDW_TICK_METRICS", "true")
 	k, runner, server := collectorFixture()
 	observed := k.collectObservation(context.Background(), server, nil)
 	if observed.status != StatusOnline || observed.image != "example/server:1" {
@@ -584,6 +586,7 @@ func TestLocalKernelTelemetryParsers(t *testing.T) {
 }
 
 func TestTickSnapshotValidation(t *testing.T) {
+	t.Setenv("RSDW_TICK_METRICS", "true")
 	now := time.Now().UTC().Truncate(time.Millisecond)
 	for _, tc := range []struct {
 		name, old, replacement, status string
@@ -651,6 +654,7 @@ func TestTickSnapshotValidation(t *testing.T) {
 }
 
 func TestTickSnapshotMissingFields(t *testing.T) {
+	t.Setenv("RSDW_TICK_METRICS", "true")
 	now := time.Now().UTC()
 	for _, path := range []string{"schemaVersion", "tick", "tick.status", "tick.source", "tick.scope", "tick.windowSeconds", "tick.sampleCount", "tick.lastSampleAgeSeconds", "tick.observedAtUnixMs", "tick.rateHz", "tick.executionMs", "tick.executionMs.p50", "tick.executionMs.p95", "tick.executionMs.p99"} {
 		for _, null := range []bool{false, true} {
@@ -717,6 +721,7 @@ func TestTickDistributionBounds(t *testing.T) {
 }
 
 func TestTickTimestampAndTransport(t *testing.T) {
+	t.Setenv("RSDW_TICK_METRICS", "true")
 	now := time.Now().UTC().Truncate(time.Millisecond)
 	for _, tc := range []struct {
 		name        string
@@ -751,6 +756,7 @@ func TestTickTimestampAndTransport(t *testing.T) {
 }
 
 func TestTickSourceFailureIsIndependent(t *testing.T) {
+	t.Setenv("RSDW_TICK_METRICS", "true")
 	for _, payload := range []string{"404", "null", "{}", "not JSON"} {
 		t.Run(payload, func(t *testing.T) {
 			k, runner, server := collectorFixture()

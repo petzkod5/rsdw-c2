@@ -6,6 +6,7 @@ import (
 	"math"
 	"os"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -66,10 +67,14 @@ const (
 )
 
 type PlayerRoster struct {
-	Status     RosterStatus      `json:"status,omitempty"`
-	Reason     string            `json:"reason,omitempty"`
-	FreshForMs int64             `json:"freshForMs,omitempty"`
-	Players    []ConnectedPlayer `json:"players"`
+	Status     RosterStatus `json:"status,omitempty"`
+	Reason     string       `json:"reason,omitempty"`
+	FreshForMs int64        `json:"freshForMs,omitempty"`
+	// FreshWindowMs is the whole freshness window of the player reading, so a
+	// client of any role can sanity-check FreshForMs without the admin-only
+	// polling configuration.
+	FreshWindowMs int64             `json:"freshWindowMs,omitempty"`
+	Players       []ConnectedPlayer `json:"players"`
 }
 
 func unavailableRoster(reason string) PlayerRoster {
@@ -105,8 +110,11 @@ var fullMetricCatalog = []struct{ key, unit, source, description string }{
 
 // tickMetricsEnabled reports whether RSDW_TICK_METRICS opts in to the game API tick
 // snapshot, which needs the tick-patched rsdragonwilds image.
+// The value is validated at startup (telemetryConfigFromEnv); anything that
+// does not parse as a boolean counts as off here.
 func tickMetricsEnabled() bool {
-	return strings.EqualFold(strings.TrimSpace(os.Getenv("RSDW_TICK_METRICS")), "true")
+	enabled, err := strconv.ParseBool(strings.TrimSpace(os.Getenv("RSDW_TICK_METRICS")))
+	return err == nil && enabled
 }
 
 func isTickKey(key string) bool {
@@ -182,7 +190,9 @@ type observation struct {
 	status           Status
 	image            string
 	endpoint         string
-	network          *networkCounters
+	// endpointAt is when the liveness tier last tried to resolve endpoint.
+	endpointAt time.Time
+	network    *networkCounters
 	// maxAge is how long the status stays valid after at. Zero means
 	// telemetryMaxAge.
 	maxAge time.Duration
@@ -271,8 +281,8 @@ func (c *telemetryStore) dueFor(id string) map[metricSource]time.Time {
 func (c TelemetryConfig) dueSources(due map[metricSource]time.Time, now time.Time, force bool) map[metricSource]bool {
 	slack := c.loopTick() / 2
 	result := map[metricSource]bool{}
-	for _, s := range append(append([]metricSource{}, metricSources...), sourceEndpoint) {
-		if s != sourceEndpoint && !c.sourceActive(s) {
+	for _, s := range metricSources {
+		if !c.sourceActive(s) {
 			continue
 		}
 		next := due[s]
@@ -284,9 +294,6 @@ func (c TelemetryConfig) dueSources(due map[metricSource]time.Time, now time.Tim
 }
 
 func (c TelemetryConfig) sourceInterval(s metricSource) time.Duration {
-	if s == sourceEndpoint {
-		return c.MetricsInterval
-	}
 	return c.source(s).Interval
 }
 
@@ -440,8 +447,8 @@ func (a *App) collectLiveness(ctx context.Context) {
 // forward with their own timestamps. A new container starts from scratch. The
 // bool reports a new container, which makes the metrics tier due at once.
 func mergeLiveness(previous *observation, live observation) (observation, bool) {
-	if previous != nil {
-		live.endpoint = previous.endpoint
+	if previous != nil && live.endpoint == "" {
+		live.endpoint, live.endpointAt = previous.endpoint, previous.endpointAt
 	}
 	newRuntime := live.runtime != "" && (previous == nil || previous.runtime != live.runtime)
 	if live.runtime == "" || previous == nil || previous.runtime != live.runtime {
@@ -648,9 +655,6 @@ func patchObservation(o observation, result metricsResult) observation {
 	if result.roster != nil {
 		o.playerRoster = *result.roster
 	}
-	if result.endpoint != "" {
-		o.endpoint = result.endpoint
-	}
 	if result.at.After(o.metricsAt) {
 		o.metricsAt = result.at
 	}
@@ -791,8 +795,9 @@ func (a *App) telemetryFor(server Server, requestedRange string) Telemetry {
 		}
 		if result.PlayerRoster.Status == RosterAvailable {
 			result.PlayerRoster.FreshForMs = playerRosterFreshForMs(players, now)
+			result.PlayerRoster.FreshWindowMs = players.window().Milliseconds()
 		} else {
-			result.PlayerRoster.FreshForMs = 0
+			result.PlayerRoster.FreshForMs, result.PlayerRoster.FreshWindowMs = 0, 0
 		}
 	} else if players.Status == "stale" {
 		result.PlayerRoster = unavailableRoster("Player count is stale")

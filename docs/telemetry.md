@@ -24,7 +24,7 @@ Status comes from the liveness tier alone. A metric that fails, times out, is st
 | The container or Pod is not Ready | `starting`, at once. The game API is not probed. |
 | Ready, and `/api/health` reports the engine ready | `online` |
 | Ready, and `/api/health` reports the engine not ready | `starting` |
-| Ready, and one `/api/health` probe failed | Stays `online` if it was online on the same container. Otherwise `starting`. |
+| Ready, and one `/api/health` probe failed | Stays `online` if it was online on the same container, with the last good uptime carried forward. Otherwise `starting`. |
 | Ready, and two consecutive `/api/health` probes failed | `attention` |
 | The Kubernetes API failed, returned unusable data, or the Pod was replaced during the pass | No change. The last known status stays, with its original `lastSeen`. The Telemetry page lists a failed "Kubernetes status check" with the reason. |
 | No successful liveness pass inside the liveness freshness window | `unknown` |
@@ -37,11 +37,15 @@ Server-down and server-recovered alerts keep their thresholds: three unhealthy o
 
 Freshness is per tier. The liveness window is three liveness intervals, never less than 45 seconds: 45 seconds by default. A metric reading stays fresh for three intervals of its own source, never less than 45 seconds: 3 minutes for resources, players, tick, and network and 15 minutes for disk by default. The window starts at the source's observation time, so a value is never shown as newer than the instrument that produced it. An older reading is `stale`.
 
+The Metrics API sample age limit widened with this change. The old collector rejected a CPU or memory sample older than a fixed 45 seconds; a sample is now accepted until three resources intervals (`telemetry.metricsInterval`) have passed, never less than 45 seconds: 3 minutes by default, and up to 45 minutes at the 15 minute maximum. The same window decides how far apart two memory samples may be before a memory-pressure streak resets, which is why memory pressure also requires the metrics interval to be at most half of its duration (see [Memory pressure restarts](reboots.md#memory-pressure-restarts)).
+
+The join address of a server (`endpoint`) is read from its Service by the liveness tier, because it is one cheap Kubernetes API read and not an exec. It is read on the first pass, retried on every pass while it is unknown, and re-read once per metrics interval after that. The last known address carries forward when a read fails. Until it is known, the UI shows "Endpoint pending", never an error.
+
 Between metrics passes, each liveness observation carries the latest readings forward with their original timestamps. Charts place a point at its observation time, skip a repeated one, and break the line when two readings are further apart than a few intervals of that metric.
 
 ## Configuration
 
-Set by environment variable, or by the `telemetry` values of the Helm chart. Intervals and timeouts are Go durations. A value outside its bounds, or an unparsable one, stops C2 at startup with an error naming the variable. `GET /api/bootstrap` returns the effective configuration to administrators as `telemetryConfig`, including the estimated exec calls per minute and server; it is read-only.
+Set by environment variable, or by the `telemetry` values of the Helm chart. Intervals and timeouts are Go durations. A value outside its bounds, or an unparsable one, stops C2 at startup with an error naming the variable. The chart checks the same bounds when it renders, so `helm template` and `helm upgrade` fail with a message naming the value instead of leaving a pod that crash-loops. `RSDW_TICK_METRICS` is a boolean like the other toggles (`true`, `false`, `1`, `0`, and the other forms Go's `strconv.ParseBool` accepts); any other value stops C2 at startup. `GET /api/bootstrap` returns the effective configuration to administrators as `telemetryConfig`, including the estimated exec calls per minute and server; it is read-only.
 
 | Environment variable | Helm value | Default | Bounds | Meaning |
 | --- | --- | --- | --- | --- |
@@ -59,6 +63,8 @@ Set by environment variable, or by the `telemetry` values of the Helm chart. Int
 | `RSDW_TELEMETRY_KUBE_TIMEOUT` | `telemetry.timeouts.kube` | `5s` | 1s to 30s | Each `kubectl get` |
 | `RSDW_TELEMETRY_HEALTH_TIMEOUT` | `telemetry.timeouts.health` | `4s` | 1s to 30s | The `/api/health` probe |
 | `RSDW_TELEMETRY_EXEC_TIMEOUT` | `telemetry.timeouts.exec` | `4s` | 1s to 30s | Each exec metric |
+
+Two combinations are rejected at startup and by the chart: memory pressure enabled with `RSDW_TELEMETRY_RESOURCES_ENABLED=false` (there are no memory samples), and memory pressure enabled with `RSDW_TELEMETRY_METRICS_INTERVAL` longer than half of `RSDW_MEMORY_PRESSURE_DURATION` (a streak needs at least two samples inside the duration, and samples up to three intervals apart count as one streak). Both errors name the settings involved.
 
 A source that is turned off reports status `disabled` with the reason "Turned off by configuration". It does not count towards `metricsAvailable` and raises no alert. Tick metrics are additionally off unless `RSDW_TICK_METRICS=true`; while off, the tick keys are absent rather than disabled.
 

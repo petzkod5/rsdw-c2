@@ -94,7 +94,7 @@ func viewerPlayerRoster(roster PlayerRoster, players ViewerMetric) PlayerRoster 
 		if players.Status != "available" || players.Value == nil || roster.Players == nil {
 			return unavailableRoster("Player roster details are not currently available")
 		}
-		result.FreshForMs = roster.FreshForMs
+		result.FreshForMs, result.FreshWindowMs = roster.FreshForMs, roster.FreshWindowMs
 		result.Players = make([]ConnectedPlayer, len(roster.Players))
 		for i, player := range roster.Players {
 			result.Players[i] = ConnectedPlayer{Name: player.Name, CharacterName: player.CharacterName}

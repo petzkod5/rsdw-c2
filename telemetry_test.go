@@ -93,6 +93,7 @@ func TestViewerServerExposesDeletionLifecycleStatus(t *testing.T) {
 }
 
 func TestActualGameTickCapture(t *testing.T) {
+	t.Setenv("RSDW_TICK_METRICS", "true")
 	data, err := os.ReadFile("verification/tick-live-observations.json")
 	if err != nil {
 		t.Fatal(err)
@@ -139,6 +140,7 @@ func TestActualGameTickCapture(t *testing.T) {
 }
 
 func TestServerJSONOmitsLegacyMetricsOnlyWhenMetricsPresent(t *testing.T) {
+	t.Setenv("RSDW_TICK_METRICS", "true")
 	for _, live := range []bool{false, true} {
 		server := Server{ID: "world", Players: 9, ServerPassword: "private-password", AdminPassword: "private-admin"}
 		if live {
@@ -175,6 +177,7 @@ func TestServerJSONOmitsLegacyMetricsOnlyWhenMetricsPresent(t *testing.T) {
 }
 
 func TestHTTPHistoryAndReadOnlyContract(t *testing.T) {
+	t.Setenv("RSDW_TICK_METRICS", "true")
 	app, runner, server := fixtureApp(t)
 	app.auth = &Auth{token: "admin-token"}
 	before, err := os.ReadFile(app.store.path)
@@ -375,6 +378,7 @@ func TestConcurrentDesiredSettingsSurviveCollection(t *testing.T) {
 }
 
 func TestCollectorDropsObservationSupersededByPendingRollout(t *testing.T) {
+	t.Setenv("RSDW_TICK_METRICS", "true")
 	app, runner, server := fixtureApp(t)
 	blocking := &blockingTelemetryRunner{base: runner, block: "/api/metrics", started: make(chan struct{}), release: make(chan struct{})}
 	app.orchestrator.(*kubeOrchestrator).runner = blocking
@@ -478,6 +482,7 @@ func TestCollectorBoundsWorkersAndStops(t *testing.T) {
 }
 
 func TestTickHistoryPreservesProducerTimestampAndGaps(t *testing.T) {
+	t.Setenv("RSDW_TICK_METRICS", "true")
 	app, runner, server := fixtureApp(t)
 	var producerNow time.Time
 	unsupported := false
@@ -529,6 +534,7 @@ func TestTickHistoryPreservesProducerTimestampAndGaps(t *testing.T) {
 }
 
 func TestTickCacheUsesExistingFreshnessWithoutRenewingSource(t *testing.T) {
+	t.Setenv("RSDW_TICK_METRICS", "true")
 	now := time.Now().UTC().Truncate(time.Millisecond)
 	collected := now.Add(-15 * time.Second)
 	metrics := emptyMetrics()

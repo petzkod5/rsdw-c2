@@ -114,8 +114,53 @@ func TestTelemetryConfigRejectsMemoryPressureWithoutResources(t *testing.T) {
 	if err := cfg.validateWith(MemoryPressurePolicy{}); err != nil {
 		t.Fatal(err)
 	}
-	if err := defaultTelemetryConfig().validateWith(MemoryPressurePolicy{Enabled: true}); err != nil {
+	if err := defaultTelemetryConfig().validateWith(MemoryPressurePolicy{Enabled: true, Duration: 10 * time.Minute}); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// Memory pressure treats samples up to three metrics intervals apart as one
+// streak, so the interval must leave room for at least two samples inside the
+// duration.
+func TestTelemetryConfigRejectsMemoryPressureSlowerThanHalfItsDuration(t *testing.T) {
+	policy := MemoryPressurePolicy{Enabled: true, Duration: 10 * time.Minute}
+	cfg := defaultTelemetryConfig()
+	cfg.MetricsInterval = 5 * time.Minute
+	if err := cfg.validateWith(policy); err != nil {
+		t.Fatalf("half the duration is allowed: %v", err)
+	}
+	cfg.MetricsInterval = 15 * time.Minute
+	err := cfg.validateWith(policy)
+	if err == nil || !strings.Contains(err.Error(), "RSDW_TELEMETRY_METRICS_INTERVAL") || !strings.Contains(err.Error(), "RSDW_MEMORY_PRESSURE_DURATION") {
+		t.Fatalf("error = %v, want one naming both settings", err)
+	}
+	cfg.MetricsInterval = 5*time.Minute + time.Second
+	if err := cfg.validateWith(policy); err == nil {
+		t.Fatal("an interval just over half the duration was accepted")
+	}
+	if err := cfg.validateWith(MemoryPressurePolicy{Duration: 10 * time.Minute}); err != nil {
+		t.Fatalf("a disabled policy must not constrain the interval: %v", err)
+	}
+}
+
+func TestTickMetricsToggleIsParsedLikeTheOtherToggles(t *testing.T) {
+	for value, want := range map[string]bool{"": false, "true": true, "TRUE": true, "True": true, "1": true, "t": true, "false": false, "0": false, "F": false} {
+		t.Setenv("RSDW_TICK_METRICS", value)
+		if _, err := telemetryConfigFromEnv(); err != nil {
+			t.Fatalf("RSDW_TICK_METRICS=%q rejected: %v", value, err)
+		}
+		if got := tickMetricsEnabled(); got != want {
+			t.Fatalf("RSDW_TICK_METRICS=%q enabled = %v, want %v", value, got, want)
+		}
+	}
+	for _, value := range []string{"yes", "on", "maybe", "garbage", "2"} {
+		t.Setenv("RSDW_TICK_METRICS", value)
+		if _, err := telemetryConfigFromEnv(); err == nil || !strings.Contains(err.Error(), "RSDW_TICK_METRICS") {
+			t.Fatalf("RSDW_TICK_METRICS=%q error = %v, want one naming the variable", value, err)
+		}
+		if tickMetricsEnabled() {
+			t.Fatalf("RSDW_TICK_METRICS=%q enabled the tick source", value)
+		}
 	}
 }
 
@@ -205,11 +250,12 @@ func TestFreshnessIsPerTier(t *testing.T) {
 }
 
 func TestDueSourcesFollowTheirIntervals(t *testing.T) {
+	t.Setenv("RSDW_TICK_METRICS", "true")
 	cfg := defaultTelemetryConfig()
 	start := time.Now()
 	due := map[metricSource]time.Time{}
 	first := cfg.dueSources(due, start, false)
-	for _, s := range append(slices.Clone(metricSources), sourceEndpoint) {
+	for _, s := range metricSources {
 		if !first[s] {
 			t.Fatalf("%s not due on the first pass", s)
 		}
@@ -219,7 +265,7 @@ func TestDueSourcesFollowTheirIntervals(t *testing.T) {
 		t.Fatalf("due after 10s: %v", got)
 	}
 	minute := cfg.dueSources(due, start.Add(time.Minute), false)
-	for _, s := range []metricSource{sourceResources, sourcePlayers, sourceNetwork, sourceTick, sourceEndpoint} {
+	for _, s := range []metricSource{sourceResources, sourcePlayers, sourceNetwork, sourceTick} {
 		if !minute[s] {
 			t.Fatalf("%s not due after 60s", s)
 		}
@@ -304,6 +350,9 @@ func TestMetricSourcesAreIndividuallyToggleable(t *testing.T) {
 		{sourceTick, "/api/metrics", "tickRate", "players"},
 	} {
 		t.Run(string(tc.source), func(t *testing.T) {
+			if tc.source == sourceTick {
+				t.Setenv("RSDW_TICK_METRICS", "true")
+			}
 			app, runner, server := fixtureApp(t)
 			cfg := defaultTelemetryConfig()
 			switch tc.source {

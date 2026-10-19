@@ -5,6 +5,11 @@ image:
 
 replicaCount: 1
 
+# Memory pressure restarts a server whose memory stays above the threshold for
+# the whole duration. It needs the Metrics API samples (telemetry.resources) and
+# at least two of them inside the duration: telemetry.metricsInterval must be at
+# most half of duration. `helm template` rejects other combinations; C2 itself
+# refuses to start with them.
 memoryPressure:
   enabled: false
   thresholdPercent: 85
@@ -29,8 +34,9 @@ memoryPressure:
 # players, network, disk and tick rate show as disabled. CPU and memory come
 # from the Kubernetes Metrics API and keep working.
 #
-# Intervals are Go durations. Bounds are enforced at startup; an invalid value
-# stops C2 with an error that names the variable. A reading stays fresh for
+# Intervals are Go durations. Bounds are enforced when the chart renders and
+# again at startup; an invalid value stops C2 with an error that names the
+# variable. A reading stays fresh for
 # three intervals (never less than 45 seconds), so a slower interval also
 # widens how long its value is shown before it turns stale.
 telemetry:

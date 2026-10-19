@@ -23,7 +23,7 @@ func (k *kubeOrchestrator) collectObservation(ctx context.Context, server Server
 	if live.runtime == "" {
 		return live
 	}
-	sources := map[metricSource]bool{sourceEndpoint: true}
+	sources := map[metricSource]bool{}
 	for _, s := range metricSources {
 		if cfg.sourceActive(s) {
 			sources[s] = true

@@ -3,6 +3,7 @@ kind: Deployment
 {{- if and (eq .Values.auth.mode "token") (not .Values.auth.adminTokenSecret.name) }}
 {{- fail "auth.adminTokenSecret.name is required; create the Secret before installing RSDW C2" }}
 {{- end }}
+{{- include "rsdwc2.validateTelemetry" . }}
 {{- $oidc := .Values.auth.oidc }}
 {{- $policy := $oidc.rolePolicy }}
 {{- $assignments := concat $policy.adminSubjects $policy.viewerSubjects $policy.adminGroups $policy.viewerGroups }}

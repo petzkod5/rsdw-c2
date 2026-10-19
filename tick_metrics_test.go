@@ -11,15 +11,15 @@ import (
 	"time"
 )
 
-// The tick decoder and its fixtures predate the RSDW_TICK_METRICS gate, so the
-// suite runs with the flag on; the flag-off tests below opt out explicitly.
+// The suite runs in the default configuration, tick metrics off. Tests of the
+// tick decoder opt in with t.Setenv("RSDW_TICK_METRICS", "true").
 func TestMain(m *testing.M) {
-	os.Setenv("RSDW_TICK_METRICS", "true")
+	os.Unsetenv("RSDW_TICK_METRICS")
 	os.Exit(m.Run())
 }
 
 func TestTickMetricsFlagParsing(t *testing.T) {
-	for value, want := range map[string]bool{"": false, "false": false, "0": false, "garbage": false, "true": true, " TRUE ": true} {
+	for value, want := range map[string]bool{"": false, "false": false, "0": false, "garbage": false, "true": true, " TRUE ": true, "1": true} {
 		t.Setenv("RSDW_TICK_METRICS", value)
 		if got := tickMetricsEnabled(); got != want {
 			t.Fatalf("RSDW_TICK_METRICS=%q enabled = %v, want %v", value, got, want)

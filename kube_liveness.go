@@ -77,6 +77,26 @@ func markUnavailable(metrics map[string]MetricReading, reason string) {
 	}
 }
 
+// refreshEndpoint fills the join address of the observation. The Service read
+// is one cheap Kubernetes API call, not an exec, so the liveness tier owns it:
+// the address is known as soon as the first pass ends, and carries forward
+// until the next refresh. A missing address is retried on every pass; a known
+// one is re-read once per metrics interval, since Service addresses rarely
+// change.
+func (k *kubeOrchestrator) refreshEndpoint(ctx context.Context, server Server, previous *observation, result *observation, cfg TelemetryConfig) {
+	now := time.Now().UTC()
+	if previous != nil {
+		result.endpoint, result.endpointAt = previous.endpoint, previous.endpointAt
+	}
+	if result.endpoint != "" && now.Sub(result.endpointAt) < cfg.MetricsInterval {
+		return
+	}
+	if resolved := k.resolveEndpoint(ctx, server); resolved != "" {
+		result.endpoint = resolved
+	}
+	result.endpointAt = now
+}
+
 // collectLiveness is the status tier. It reads the Deployment and Pod from the
 // Kubernetes API and, for a Ready server container, makes one game API health
 // probe. It never runs a metric source.
@@ -91,6 +111,7 @@ func (k *kubeOrchestrator) collectLiveness(ctx context.Context, server Server, p
 	defer cancel()
 	window := cfg.livenessWindow()
 	result := observation{metrics: emptyMetricsFor(cfg), playerRoster: unavailableRoster("Player roster was not collected"), status: StatusUnknown, maxAge: window}
+	k.refreshEndpoint(ctx, server, previous, &result, cfg)
 	target, status, err := k.resolvePod(ctx, server)
 	if err != nil && status == StatusUnknown {
 		return observation{}, err
@@ -161,6 +182,12 @@ func (k *kubeOrchestrator) collectLiveness(ctx context.Context, server Server, p
 			result.status = StatusAttention
 		case sameRuntime && previous.status == StatusOnline && time.Since(previous.at) <= previous.window():
 			result.status = StatusOnline
+			// The status is retained, so keep the uptime it was last
+			// confirmed with instead of blanking it for one pass.
+			if uptime := previous.metrics["uptimeSeconds"]; uptime.Status == "available" {
+				uptime.maxAge = window
+				result.metrics["uptimeSeconds"] = uptime
+			}
 		default:
 			result.status = StatusStarting
 		}
@@ -171,18 +198,13 @@ func (k *kubeOrchestrator) collectLiveness(ctx context.Context, server Server, p
 // metricsResult holds what one metrics pass collected. Only the sources that
 // ran have readings; everything else keeps its previous value.
 type metricsResult struct {
-	runtime  string
-	at       time.Time
-	ran      map[metricSource]bool
-	metrics  map[string]MetricReading
-	network  *networkCounters
-	roster   *PlayerRoster
-	endpoint string
+	runtime string
+	at      time.Time
+	ran     map[metricSource]bool
+	metrics map[string]MetricReading
+	network *networkCounters
+	roster  *PlayerRoster
 }
-
-// sourceEndpoint is the Service address lookup. It is refreshed with the
-// metrics tier but is not a metric and cannot be turned off.
-const sourceEndpoint metricSource = "endpoint"
 
 // collectMetrics is the detail tier. It runs the requested sources against the
 // server's current container and returns readings only; it has no way to
@@ -205,9 +227,6 @@ func (k *kubeOrchestrator) collectMetrics(ctx context.Context, server Server, so
 			return result, false
 		}
 		result.runtime = target.pod.Metadata.UID + "/" + target.containerID
-	}
-	if sources[sourceEndpoint] {
-		result.endpoint = k.resolveEndpoint(ctx, server)
 	}
 	if !measure {
 		result.at = time.Now().UTC()

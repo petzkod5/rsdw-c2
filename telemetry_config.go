@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -139,6 +140,11 @@ func telemetryConfigFromEnv() (TelemetryConfig, error) {
 	// follow it unless overridden; disk is slow by default.
 	cfg.Resources.Interval, cfg.Players.Interval = cfg.MetricsInterval, cfg.MetricsInterval
 	cfg.Tick.Interval, cfg.Network.Interval = cfg.MetricsInterval, cfg.MetricsInterval
+	if raw := strings.TrimSpace(os.Getenv("RSDW_TICK_METRICS")); err == nil && raw != "" {
+		if _, parseErr := strconv.ParseBool(raw); parseErr != nil {
+			err = fmt.Errorf("RSDW_TICK_METRICS must be a boolean")
+		}
+	}
 	duration(&cfg.Tick.Interval, "RSDW_TELEMETRY_TICK_INTERVAL", 10*time.Second, 15*time.Minute)
 	duration(&cfg.Network.Interval, "RSDW_TELEMETRY_NETWORK_INTERVAL", 10*time.Second, 15*time.Minute)
 	duration(&cfg.Disk.Interval, "RSDW_TELEMETRY_DISK_INTERVAL", time.Minute, time.Hour)
@@ -149,6 +155,13 @@ func telemetryConfigFromEnv() (TelemetryConfig, error) {
 func (c TelemetryConfig) validateWith(memory MemoryPressurePolicy) error {
 	if memory.Enabled && !c.Resources.Enabled {
 		return fmt.Errorf("RSDW_MEMORY_PRESSURE_ENABLED requires RSDW_TELEMETRY_RESOURCES_ENABLED, which supplies the memory samples")
+	}
+	// Memory pressure accepts samples up to three metrics intervals apart as
+	// one streak. Needing at least two samples inside the duration keeps a
+	// single sample, or two samples a whole interval apart, from restarting
+	// a server.
+	if memory.Enabled && c.MetricsInterval > memory.Duration/2 {
+		return fmt.Errorf("RSDW_TELEMETRY_METRICS_INTERVAL (%s) must be at most half of RSDW_MEMORY_PRESSURE_DURATION (%s) when RSDW_MEMORY_PRESSURE_ENABLED is true: lower the metrics interval or raise the duration", c.MetricsInterval, memory.Duration)
 	}
 	return nil
 }
@@ -219,14 +232,14 @@ func (c TelemetryConfig) retainedSamples() int {
 	return max(12, int(telemetryRetention/c.LivenessInterval))
 }
 
-// livenessBudget bounds one liveness pass: three discovery reads, one health
-// probe and one identity re-check.
+// livenessBudget bounds one liveness pass: the Service lookup (up to two
+// reads), three discovery reads, one health probe and one identity re-check.
 func (c TelemetryConfig) livenessBudget() time.Duration {
-	return 4*c.KubeTimeout + c.HealthTimeout
+	return 6*c.KubeTimeout + c.HealthTimeout
 }
 
 // metricsBudget bounds one metrics pass for the sources that are active: Pod
-// discovery, the endpoint lookup, the Metrics API read, one identity re-check
+// discovery, the Metrics API read, one identity re-check
 // and one exec per active exec source.
 func (c TelemetryConfig) metricsBudget() time.Duration {
 	budget := 7 * c.KubeTimeout

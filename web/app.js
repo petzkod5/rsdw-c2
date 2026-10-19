@@ -191,17 +191,21 @@ function hideCachedPlayerNames(serverId) {
   if (state.telemetry?.server?.id === serverId) state.telemetry = {...state.telemetry, playerRoster:null};
 }
 
-// The longest a player roster can stay fresh: the server sends the exact remaining time, this only rejects nonsense.
-function rosterFreshLimitMs() {
+// The server sends the exact time a roster stays fresh (freshForMs) and the whole window it was judged against (freshWindowMs), to every role.
+// These bounds only reject nonsense: 45 minutes is three times the longest metrics interval the server accepts (15 minutes).
+const rosterFreshCeilingMs = 45 * 60 * 1000;
+function rosterFreshLimitMs(roster) {
+  const window = Number(roster?.freshWindowMs);
+  if (Number.isFinite(window) && window > 0) return Math.min(window, rosterFreshCeilingMs);
   const seconds = Number(state.telemetryConfig?.metricFreshnessSeconds?.players);
-  return Math.max(45000, Number.isFinite(seconds) ? seconds * 1000 : 0);
+  return Number.isFinite(seconds) && seconds > 0 ? Math.min(seconds * 1000, rosterFreshCeilingMs) : rosterFreshCeilingMs;
 }
 function acceptTelemetry(result, startedAt, receivedAt) {
   const key = rosterObservationKey(result);
   const metric = result?.metrics?.players;
   const freshForMs = Number(result?.playerRoster?.freshForMs);
   state.telemetry = result;
-  if (key && metric?.status === 'available' && result.playerRoster?.status === 'available' && Number.isFinite(freshForMs) && freshForMs >= 0 && freshForMs <= rosterFreshLimitMs()) {
+  if (key && metric?.status === 'available' && result.playerRoster?.status === 'available' && Number.isFinite(freshForMs) && freshForMs >= 0 && freshForMs <= rosterFreshLimitMs(result.playerRoster)) {
     const deadline = receivedAt + Math.max(0, freshForMs - Math.max(0, receivedAt - startedAt));
     state.rosterDeadline = state.rosterObservation === key && state.rosterDeadline > 0 ? Math.min(state.rosterDeadline, deadline) : deadline;
     state.rosterObservation = key;
@@ -656,6 +660,11 @@ function metricText(server, key, suffix = '') {
   const reading = server.metrics?.[key];
   return ({unsupported:'Unsupported', stale:'Stale', error:'Collection failed', warming_up:'Collecting', warming:'Collecting', starting:'Starting', faulted:'Collection failed', stopped:'Stopped', unavailable:'Unavailable', disabled:'Disabled'})[reading?.status] || 'Awaiting sample';
 }
+// The join address is a best-effort detail: when it is not known yet the UI says so neutrally, and a stopped server shows nothing.
+function endpointText(server) {
+  if (server.endpoint) return server.endpoint;
+  return server.status === 'stopped' ? '' : 'Endpoint pending';
+}
 // Dashboard rows only report status. A metric without a reading is loading or simply absent: the reason lives on the Telemetry page.
 function dashboardMetricText(server, key, suffix = '') {
   const value = metricValue(server, key);
@@ -728,7 +737,7 @@ function dashboardModel() {
       : {state:'none',text:'Not scheduled'};
     const progress = deployProgress(server);
     return {
-      id:server.id, worldName:serverLabel(server), endpoint:can('maintenance') ? server.endpoint || (displayStatus === 'checking' ? 'Endpoint pending' : 'Endpoint unavailable') : '',
+      id:server.id, worldName:serverLabel(server), endpoint:can('maintenance') ? endpointText(server) : '',
       status:displayStatus, statusLabel:displayStatus === 'checking' ? 'Checking' : displayStatus === 'unknown' ? 'Unknown' : server.status === 'attention' ? 'Needs attention' : server.status === 'stopped' ? 'Stopped' : server.status === 'online' ? 'Online' : server.status === 'starting' ? 'Starting' : server.status === 'deleting' ? 'Deleting' : server.status === 'stale' ? 'Stale' : 'Unknown',
       running, attention, update:can('updateCheck') && server.updateAvailable === true,
       players, capacity:server.maxPlayers, playersText:`${players == null ? dashboardMetricText(server, 'players') : number(players)} / ${number(server.maxPlayers)}`,
@@ -850,18 +859,18 @@ function serverOverview() {
     can('delete') ? '<div class="action-card"><button class="danger" data-action="delete" data-testid="delete-server">Delete server</button></div>' : '',
   ].filter(Boolean).join('');
   const engine = server.metrics?.engineReady;
-  const evidence = engine ? `<p>Engine readiness: ${escapeHTML(metricValue(server, 'engineReady') === 1 ? 'Ready' : metricValue(server, 'engineReady') === 0 ? 'Not ready' : metricText(server, 'engineReady'))}${engine.reason ? ` · ${escapeHTML(engine.reason)}` : ''}</p>` : '';
+  const evidence = engine && metricValue(server, 'engineReady') != null ? `<p>Engine readiness: ${metricValue(server, 'engineReady') === 1 ? 'Ready' : 'Not ready'}</p>` : '';
   const links = ['telemetry','maintenance','events','reboots']
     .filter((page) => can(page))
     .map((page) => `<a href="${escapeHTML(scopedHash(page, selected.id))}">${pages[page][0]}</a>`)
     .join('');
   const details = can('maintenance') || can('reboots')
-    ? `<section class="panel"><dl class="detail-list">${can('reboots') ? `<div><dt>Next reboot</dt><dd data-testid="overview-next-reboot">${next ? escapeHTML(zonedDate(next.nextRun, state.displayTimezone || 'UTC')) : 'Unavailable'}</dd></div>` : ''}${can('maintenance') ? `<div><dt>Join endpoint</dt><dd class="mono">${escapeHTML(selected.endpoint || 'Unavailable')}${selected.endpoint ? ' <button data-action="copy-endpoint" data-testid="copy-endpoint">Copy endpoint</button>' : ''}</dd></div>` : ''}</dl></section>`
+    ? `<section class="panel"><dl class="detail-list">${can('reboots') ? `<div><dt>Next reboot</dt><dd data-testid="overview-next-reboot">${next ? escapeHTML(zonedDate(next.nextRun, state.displayTimezone || 'UTC')) : state.rebootsAvailable ? 'Not scheduled' : '—'}</dd></div>` : ''}${can('maintenance') ? `<div><dt>Join endpoint</dt><dd class="mono">${escapeHTML(endpointText(selected) || '—')}${selected.endpoint ? ' <button data-action="copy-endpoint" data-testid="copy-endpoint">Copy endpoint</button>' : ''}</dd></div>` : ''}</dl></section>`
     : '';
   const actionPanel = actions && !state.deletions[selected.id] && selected.status !== 'deleting'
     ? `<section class="panel"><div class="panel-heading"><h2>Server actions</h2></div><div class="action-grid">${actions}</div><p class="inline-note">Restart and update actions require confirmation and disconnect active players.</p></section>`
     : '';
-  return `<section class="panel" data-testid="server-overview"><div class="panel-heading"><h2>${escapeHTML(serverLabel(server))}</h2>${status(serverStatus(server))}</div>${evidence}<div class="toolbar">${links}</div><div class="stats ${hasTick(server) ? '' : 'dashboard-stats'}">${stat('API-reported players', `${metricText(server, 'players')} / ${number(server.maxPlayers)}`, 'server')}${hasTick(server) ? stat('Tick rate', metricText(server, 'tickRate', ' TPS'), 'pulse') : ''}${stat('Memory working set', metricValue(server, 'memoryUsedBytes') == null ? metricText(server, 'memoryUsedBytes') : bytes(metricValue(server, 'memoryUsedBytes')), 'cpu')}${stat('Memory limit', metricValue(server, 'memoryLimitBytes') == null ? metricText(server, 'memoryLimitBytes') : bytes(metricValue(server, 'memoryLimitBytes')), 'cpu')}</div></section><div class="stack section-gap">${connectedPlayers()}${details}${actionPanel}</div>`;
+  return `<section class="panel" data-testid="server-overview"><div class="panel-heading"><h2>${escapeHTML(serverLabel(server))}</h2>${status(serverStatus(server))}</div>${evidence}<div class="toolbar">${links}</div><div class="stats ${hasTick(server) ? '' : 'dashboard-stats'}">${stat('API-reported players', `${dashboardMetricText(server, 'players')} / ${number(server.maxPlayers)}`, 'server')}${hasTick(server) ? stat('Tick rate', dashboardMetricText(server, 'tickRate', ' TPS'), 'pulse') : ''}${stat('Memory working set', metricValue(server, 'memoryUsedBytes') == null ? dashboardMetricText(server, 'memoryUsedBytes') : bytes(metricValue(server, 'memoryUsedBytes')), 'cpu')}${stat('Memory limit', metricValue(server, 'memoryLimitBytes') == null ? dashboardMetricText(server, 'memoryLimitBytes') : bytes(metricValue(server, 'memoryLimitBytes')), 'cpu')}</div></section><div class="stack section-gap">${connectedPlayers()}${details}${actionPanel}</div>`;
 }
 function connectedPlayers() {
   const data = state.telemetry;
@@ -871,7 +880,7 @@ function connectedPlayers() {
   const key = rosterObservationKey(data);
   const expired = state.rosterObservation === key && Number.isFinite(state.rosterDeadline) ? monotonicNow() >= state.rosterDeadline : (() => {
     const age = Date.now() - Date.parse(reading?.observedAt);
-    return !Number.isFinite(age) || age > rosterFreshLimitMs() || age < -5000;
+    return !Number.isFinite(age) || age > rosterFreshLimitMs(roster) || age < -5000;
   })();
   const playerField = (value, fallback) => escapeHTML(typeof value === 'string' && value.trim() ? value : fallback);
   let content = '<p class="no-results">Connected players are unavailable.</p>';
@@ -879,7 +888,7 @@ function connectedPlayers() {
     if (reading?.status === 'stale' || (reading?.status === 'available' && expired)) {
       content = '<p class="no-results">Connected players are stale. Refresh telemetry to see the current roster.</p>';
     } else if (reading?.status === 'error') {
-      content = '<p class="no-results">Connected players are unavailable. The latest collection failed.</p>';
+      content = '<p class="no-results">Connected players are unavailable.</p>';
     } else if (reading?.status === 'available' && roster?.status === 'error') {
       content = '<p class="no-results">Connected players are unavailable. The game API returned an invalid roster.</p>';
     } else if (reading?.status === 'available' && roster?.status === 'unavailable') {
@@ -927,7 +936,7 @@ function maintenance() {
     : `<div class="action-card"><button class="danger" data-action="restart" data-testid="restart-server">${icon('refresh')}Restart server</button><p>Disconnects active players and restarts this world.</p></div><div class="action-card"><button data-action="update" data-testid="update-image">${icon('download')}Update image</button><p>Choose a container image tag and roll out the update.</p></div><div class="action-card"><button data-action="check-update" data-testid="check-update">${icon('search')}Check update</button><p>Compare the current image with the desired image.</p></div><div class="action-card"><button class="danger" data-action="stop" data-testid="stop-server">${icon('warning')}Stop server</button><p>Disconnects active players. World data and this inventory row stay.</p></div>`;
   if (!parked && can('restore-server')) lifecycleActions += `<div class="action-card"><button data-action="restore-server" data-testid="restore-server">${icon('upload')}Restore</button><p>Restore a tracked backup or custom .sav into this world.</p></div>`;
   const healthStatus = serverStatus(server);
-  return `${banner}<div class="split"><section class="panel"><div class="panel-heading"><div><h2>Server lifecycle</h2><p>${escapeHTML(serverLabel(server))}</p></div>${status(healthStatus)}</div><dl class="detail-list lifecycle-details"><div><dt>Current image</dt><dd class="mono">${escapeHTML(server.currentImage || 'Not reported')}</dd></div><div><dt>Desired image</dt><dd class="mono">${escapeHTML(server.desiredImage || 'Not configured')}</dd></div><div><dt>API uptime</dt><dd>${duration(metricValue(server, 'uptimeSeconds'))}</dd></div><div><dt>Last restart</dt><dd>${escapeHTML(date(server.lastRestart))}</dd></div><div><dt>Namespace</dt><dd class="mono">${escapeHTML(server.namespace || '—')}</dd></div><div><dt>Connection endpoint</dt><dd class="mono">${escapeHTML(server.endpoint || 'Endpoint unavailable. Ask your cluster operator for the server address and game port.')}</dd></div><div><dt>Memory limit</dt><dd>${server.memoryLimitMiB ? `${number(server.memoryLimitMiB)} MiB` : 'Not recorded'}</dd></div><div><dt>CPU limit</dt><dd>${server.cpuLimitMillis ? `${number(server.cpuLimitMillis)} millicores` : 'Not recorded'}</dd></div><div><dt>Player limit</dt><dd>${number(server.maxPlayers)}</dd></div><div><dt>Creator</dt><dd>${escapeHTML(server.name || 'Not recorded')}</dd></div><div><dt>Stable server ID</dt><dd class="mono">${escapeHTML(server.id)}</dd></div></dl><div class="action-grid">${lifecycleActions}</div><p class="inline-note">Stop, start, restart, update, and restore require confirmation.</p></section><div class="stack"><section class="panel"><div class="panel-heading"><h2>Readiness</h2></div><dl class="detail-list"><div><dt>Server health</dt><dd>${status(healthStatus)}</dd></div><div><dt>Players connected</dt><dd>${metricText(server, 'players')} / ${number(server.maxPlayers)}</dd></div><div><dt>Image status</dt><dd class="${server.updateAvailable ? 'amber' : ''}">${server.updateAvailable ? 'Update available' : 'No update reported'}</dd></div><div><dt>Last seen</dt><dd>${escapeHTML(date(server.lastSeen))}</dd></div></dl><p class="inline-note">Choose a quiet moment for maintenance. Active players will be disconnected.</p></section><section class="panel"><div class="panel-heading"><h2>Recent changes</h2></div>${changes.length ? `<div class="table-wrap"><table><thead><tr><th>Change</th><th>Time</th></tr></thead><tbody>${changes.slice(0,4).map((event) => `<tr><td>${escapeHTML(event.message)}</td><td title="${escapeHTML(date(event.timestamp))}">${escapeHTML(date(event.timestamp, true))}</td></tr>`).join('')}</tbody></table></div>` : '<p class="no-results">No changes recorded for this server.</p>'}</section></div></div><section class="panel section-gap"><div class="panel-heading"><h2>Audit trail</h2><button class="link-button" data-action="view-events" data-testid="maintenance-events">View events ${icon('arrow')}</button></div>${eventTable(activity.slice(0,10))}<p class="inline-note">Recorded server events. Actor identity is not reported by this source.</p></section>`;
+  return `${banner}<div class="split"><section class="panel"><div class="panel-heading"><div><h2>Server lifecycle</h2><p>${escapeHTML(serverLabel(server))}</p></div>${status(healthStatus)}</div><dl class="detail-list lifecycle-details"><div><dt>Current image</dt><dd class="mono">${escapeHTML(server.currentImage || 'Not reported')}</dd></div><div><dt>Desired image</dt><dd class="mono">${escapeHTML(server.desiredImage || 'Not configured')}</dd></div><div><dt>API uptime</dt><dd>${duration(metricValue(server, 'uptimeSeconds'))}</dd></div><div><dt>Last restart</dt><dd>${escapeHTML(date(server.lastRestart))}</dd></div><div><dt>Namespace</dt><dd class="mono">${escapeHTML(server.namespace || '—')}</dd></div><div><dt>Connection endpoint</dt><dd class="mono">${escapeHTML(endpointText(server) || '—')}</dd></div><div><dt>Memory limit</dt><dd>${server.memoryLimitMiB ? `${number(server.memoryLimitMiB)} MiB` : 'Not recorded'}</dd></div><div><dt>CPU limit</dt><dd>${server.cpuLimitMillis ? `${number(server.cpuLimitMillis)} millicores` : 'Not recorded'}</dd></div><div><dt>Player limit</dt><dd>${number(server.maxPlayers)}</dd></div><div><dt>Creator</dt><dd>${escapeHTML(server.name || 'Not recorded')}</dd></div><div><dt>Stable server ID</dt><dd class="mono">${escapeHTML(server.id)}</dd></div></dl><div class="action-grid">${lifecycleActions}</div><p class="inline-note">Stop, start, restart, update, and restore require confirmation.</p></section><div class="stack"><section class="panel"><div class="panel-heading"><h2>Readiness</h2></div><dl class="detail-list"><div><dt>Server health</dt><dd>${status(healthStatus)}</dd></div><div><dt>Players connected</dt><dd>${dashboardMetricText(server, 'players')} / ${number(server.maxPlayers)}</dd></div><div><dt>Image status</dt><dd class="${server.updateAvailable ? 'amber' : ''}">${server.updateAvailable ? 'Update available' : 'No update reported'}</dd></div><div><dt>Last seen</dt><dd>${escapeHTML(date(server.lastSeen))}</dd></div></dl><p class="inline-note">Choose a quiet moment for maintenance. Active players will be disconnected.</p></section><section class="panel"><div class="panel-heading"><h2>Recent changes</h2></div>${changes.length ? `<div class="table-wrap"><table><thead><tr><th>Change</th><th>Time</th></tr></thead><tbody>${changes.slice(0,4).map((event) => `<tr><td>${escapeHTML(event.message)}</td><td title="${escapeHTML(date(event.timestamp))}">${escapeHTML(date(event.timestamp, true))}</td></tr>`).join('')}</tbody></table></div>` : '<p class="no-results">No changes recorded for this server.</p>'}</section></div></div><section class="panel section-gap"><div class="panel-heading"><h2>Audit trail</h2><button class="link-button" data-action="view-events" data-testid="maintenance-events">View events ${icon('arrow')}</button></div>${eventTable(activity.slice(0,10))}<p class="inline-note">Recorded server events. Actor identity is not reported by this source.</p></section>`;
 }
 function backupServer(id) { return state.servers.find((server) => server.id === id); }
 function backupProfile(id) { return state.backupProfiles.find((profile) => profile.id === id); }

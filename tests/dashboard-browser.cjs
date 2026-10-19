@@ -118,7 +118,7 @@ async function run() {
     const failed = (key,status = 'error') => [key,{value:null,status,reason:`Game API ${key}: context deadline exceeded`}];
     const failedMetrics = ['players','tickRate','memoryUsedBytes','memoryLimitBytes','cpuPercent','diskPercent','networkBytesPerSecond'];
     servers.push(
-      {id:'quiet',worldName:'Quiet Glade',status:'online',maxPlayers:8,endpoint:'10.20.0.30:7777',updateAvailable:false,metricsAvailable:false,metrics:Object.fromEntries(failedMetrics.map(key => failed(key,key === 'tickRate' ? 'unsupported' : key === 'diskPercent' ? 'stale' : 'error')))},
+      {id:'quiet',worldName:'Quiet Glade',status:'online',maxPlayers:8,endpoint:'',updateAvailable:false,metricsAvailable:false,metrics:Object.fromEntries(failedMetrics.map(key => failed(key,key === 'tickRate' ? 'unsupported' : key === 'diskPercent' ? 'stale' : 'error')))},
       {id:'lost',worldName:'Lost Hollow',status:'unknown',maxPlayers:8,endpoint:'10.20.0.31:7777',updateAvailable:false,metricsAvailable:false,metrics:Object.fromEntries(failedMetrics.map(key => failed(key,'unavailable')))},
     );
     await page.goto('http://dashboard.test/#dashboard');
@@ -133,9 +133,30 @@ async function run() {
       assert.equal(await lostScope.locator('.status').innerText(),'Unknown',`${view} unknown status`);
       for (const text of [await scope.innerText(),await lostScope.innerText()]) assert.doesNotMatch(text,/Check failed|Collection failed|Unable to confirm|Unavailable|Stale|Unsupported|Disabled/i,`${view}: ${text}`);
       assert.match(await scope.innerText(),/—/);
+      // The endpoint is resolved after the first status pass; until then an online server says so neutrally.
+      assert.match(await scope.innerText(),/Endpoint pending/,`${view}: endpoint pending`);
     }
-    assert.doesNotMatch(await page.locator('#content').innerText(),/Check failed|Unable to confirm/);
+    assert.doesNotMatch(await page.locator('#content').innerText(),/Check failed|Unable to confirm|Endpoint unavailable/);
     await page.getByRole('button',{name:'Row view',exact:true}).click();
+    // The per-server pages use the same neutral rendering; the reasons stay in the Telemetry page's metric sources table.
+    for (const id of ['quiet','lost']) {
+      await page.goto(`http://dashboard.test/#servers/${id}`);
+      await page.getByTestId('server-overview').waitFor();
+      await page.waitForFunction(() => !state.refreshing);
+      // The roster panel keeps its own wording for a roster that cannot be shown.
+      const overview = await page.locator('#content').evaluate((content) => { const copy = content.cloneNode(true); copy.querySelector('[data-testid="connected-players"]')?.remove(); return copy.textContent; });
+      assert.match(overview,id === 'quiet' ? /Online/ : /Unknown/,`${id} overview status`);
+      assert.doesNotMatch(overview,/Check failed|Collection failed|Unable to confirm|Endpoint unavailable|Stale|Unsupported|Unavailable|Disabled|context deadline/i,`${id} overview: ${overview}`);
+      assert.match(overview,/Endpoint pending|10\.20\.0\.31/);
+    }
+    await page.goto('http://dashboard.test/#servers/quiet/telemetry');
+    await page.waitForFunction(() => !state.refreshing);
+    await page.goto('http://dashboard.test/#telemetry?serverId=quiet');
+    await page.getByTestId('telemetry-range').waitFor();
+    assert.match(await page.locator('.metric-sources, #content').first().innerText(),/Game API players: context deadline exceeded/,'the Telemetry page keeps the detailed reasons');
+    await page.goto('http://dashboard.test/#dashboard');
+    await page.reload();
+    await row('lost').waitFor();
     servers.splice(-2);
     viewer = true;
     await page.goto('http://dashboard.test/#dashboard');
