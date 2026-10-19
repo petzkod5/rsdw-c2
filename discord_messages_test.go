@@ -82,7 +82,7 @@ func TestDiscordMessageRejectsUnsupportedKinds(t *testing.T) {
 	})
 	for _, kind := range []EventKind{"unknown-private-kind", ""} {
 		delivery := Delivery{Event: Event{Kind: kind, Message: "private message", Details: "private details"}}
-		if _, err := renderDiscordEmbed(delivery.Event); err != errUnsupportedDiscordMessage {
+		if _, err := renderDiscordEmbed(delivery.Event, nil); err != errUnsupportedDiscordMessage {
 			t.Fatalf("render error = %v", err)
 		}
 		if _, err := buildDiscordMessage(delivery); err != errUnsupportedDiscordMessage || err.Error() != "Discord message kind is unsupported or unavailable" {
@@ -95,7 +95,7 @@ func TestDiscordMessageRejectsUnsupportedKinds(t *testing.T) {
 }
 
 func TestDiscordMessageMissingServerAndTimestamp(t *testing.T) {
-	embed, err := renderDiscordEmbed(Event{Kind: ServerDown, ServerID: "internal-server-id"})
+	embed, err := renderDiscordEmbed(Event{Kind: ServerDown, ServerID: "internal-server-id"}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -106,7 +106,7 @@ func TestDiscordMessageMissingServerAndTimestamp(t *testing.T) {
 	if strings.Contains(string(data), "timestamp") || strings.Contains(string(data), "internal-server-id") {
 		t.Fatalf("embed = %s", data)
 	}
-	testEmbed, err := renderDiscordEmbed(Event{Kind: IntegrationTest, ServerName: "Must not appear"})
+	testEmbed, err := renderDiscordEmbed(Event{Kind: IntegrationTest, ServerName: "Must not appear"}, nil)
 	if err != nil || len(testEmbed.Fields) != 0 {
 		t.Fatalf("test embed = %+v, %v", testEmbed, err)
 	}

@@ -264,6 +264,9 @@ func (a *App) completeDeletion(record deletionRecord, server Server) error {
 		}
 		for key, integration := range state.Integrations {
 			integration.ServerIDs = slices.DeleteFunc(integration.ServerIDs, func(value string) bool { return value == record.ServerID })
+			if delete(integration.ServerMessages, record.ServerID); len(integration.ServerMessages) == 0 {
+				integration.ServerMessages = nil
+			}
 			state.Integrations[key] = integration
 		}
 		cancelServerDeliveries(state, record.ServerID)

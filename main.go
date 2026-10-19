@@ -135,6 +135,7 @@ type Event struct {
 	ScheduleID   string        `json:"scheduleId,omitempty"`
 	OccurrenceID string        `json:"occurrenceId,omitempty"`
 	Actor        string        `json:"actor,omitempty"`
+	Image        string        `json:"image,omitempty"`
 	ID           string        `json:"id"`
 	Timestamp    time.Time     `json:"timestamp"`
 	ServerID     string        `json:"serverId"`
@@ -374,7 +375,7 @@ func (s State) clone() State {
 		}
 		integration.ServerIDs = append([]string{}, integration.ServerIDs...)
 		integration.Rules = maps.Clone(integration.Rules)
-		next.Integrations[id] = integration
+		next.Integrations[id] = integration.cloneMessages()
 	}
 	for id, producer := range next.Producers {
 		if producer.MemoryPressure != nil {
@@ -390,7 +391,7 @@ func (s State) clone() State {
 	}
 	for id, delivery := range next.Deliveries {
 		delivery.Event = delivery.Event.clone()
-		next.Deliveries[id] = delivery
+		next.Deliveries[id] = delivery.cloneTemplate()
 	}
 	return next
 }

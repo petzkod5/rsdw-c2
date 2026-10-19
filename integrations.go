@@ -60,6 +60,8 @@ var alertRules = []AlertRule{
 	{BackupFailed, "Backup failed", true, "C2 backup failure", "observed"},
 }
 
+const integrationBodyLimit = 1 << 20
+
 type SecretReference struct {
 	Name string `json:"name"`
 	Key  string `json:"key"`
@@ -77,6 +79,10 @@ type DiscordIntegration struct {
 	SecretRef  SecretReference     `json:"secretRef"`
 	ServerIDs  []string            `json:"serverIds"`
 	Rules      map[EventKind]bool  `json:"rules"`
+	// Messages and ServerMessages hold only customized Discord templates. A missing entry means the next level
+	// down applies: server override, then integration template, then the built-in default.
+	Messages       map[EventKind]MessageTemplate            `json:"messages,omitempty"`
+	ServerMessages map[string]map[EventKind]MessageTemplate `json:"serverMessages,omitempty"`
 }
 
 type DeliveryStatus string
@@ -100,11 +106,15 @@ type Delivery struct {
 	Event         Event               `json:"event"`
 	GuildID       string              `json:"guildId"`
 	ChannelID     string              `json:"channelId"`
-	Status        DeliveryStatus      `json:"status"`
-	Attempts      int                 `json:"attempts"`
-	NextAttempt   time.Time           `json:"nextAttempt"`
-	UpdatedAt     time.Time           `json:"updatedAt"`
-	Result        string              `json:"result"`
+	// Template is the customized message in effect when the delivery was created; nil means the built-in default.
+	Template *MessageTemplate `json:"template,omitempty"`
+	// Test marks an operator-requested test, which bypasses rules, quiet hours, and warning eligibility.
+	Test        bool           `json:"test,omitempty"`
+	Status      DeliveryStatus `json:"status"`
+	Attempts    int            `json:"attempts"`
+	NextAttempt time.Time      `json:"nextAttempt"`
+	UpdatedAt   time.Time      `json:"updatedAt"`
+	Result      string         `json:"result"`
 }
 
 func (s *State) initIntegrations() {
@@ -171,15 +181,35 @@ func (s *State) pruneDeliveryHistory() {
 }
 
 func queueDeliveryForNewEvent(state *State, integration DiscordIntegration, event Event) Delivery {
+	return queueDelivery(state, integration, event, false)
+}
+
+func queueDelivery(state *State, integration DiscordIntegration, event Event, test bool) Delivery {
 	sum := sha256.Sum256([]byte(event.ID + "/" + integration.ID))
 	id := hex.EncodeToString(sum[:12])
 	if existing, ok := state.Deliveries[id]; ok {
 		existing.Event = existing.Event.clone()
-		return existing
+		return existing.cloneTemplate()
 	}
-	d := Delivery{ID: id, IntegrationID: integration.ID, Event: event.clone(), Provider: normalizedProvider(integration.Provider), WebhookURL: integration.WebhookURL, GuildID: integration.GuildID, ChannelID: integration.ChannelID, Status: DeliveryPending, UpdatedAt: event.Timestamp}
+	d := Delivery{ID: id, IntegrationID: integration.ID, Event: event.clone(), Provider: normalizedProvider(integration.Provider), WebhookURL: integration.WebhookURL, GuildID: integration.GuildID, ChannelID: integration.ChannelID, Status: DeliveryPending, UpdatedAt: event.Timestamp, Test: test}
+	if d.Provider == providerDiscord {
+		// Freeze the customized text now so Recent messages and retries keep showing what the delivery was
+		// created with, however the templates are edited afterwards.
+		if effective := integration.resolveMessage(event.ServerID, event.Kind); effective.Source != messageSourceDefault {
+			template := effective.MessageTemplate
+			d.Template = &template
+		}
+	}
 	state.Deliveries[id] = d
 	d.Event = d.Event.clone()
+	return d.cloneTemplate()
+}
+
+func (d Delivery) cloneTemplate() Delivery {
+	if d.Template != nil {
+		template := d.Template.clone()
+		d.Template = &template
+	}
 	return d
 }
 
@@ -213,12 +243,15 @@ func emitAlertEvidence(state *State, server Server, kind EventKind, operation, d
 	}
 	event := Event{ID: randomID(), Timestamp: at, ServerID: server.ID, ServerName: worldLabel(server), Category: category, Severity: severity, Message: rule.Label, Details: details, Kind: kind, Source: rule.Source, Accuracy: rule.Accuracy, OperationID: operation}
 	event.Evidence, event.ScheduleID, event.OccurrenceID = evidence, scheduleID, occurrenceID
+	if event.Image = server.CurrentImage; event.Image == "" {
+		event.Image = server.DesiredImage
+	}
 	if len(evidence.JoinedPlayers) > 0 {
 		event.Accuracy, event.Message = "observed", "Player joined"
 	}
 	addEvent(state, event)
 	for _, integration := range state.Integrations {
-		if integration.Enabled && integration.Rules[kind] && slices.Contains(integration.ServerIDs, server.ID) && !integration.QuietHours.contains(at) && integration.target().validate() == nil {
+		if integration.Enabled && integration.Rules[kind] && slices.Contains(integration.ServerIDs, server.ID) && integration.messageEnabled(server.ID, kind) && !integration.QuietHours.contains(at) && integration.target().validate() == nil {
 			queueDeliveryForNewEvent(state, integration, event)
 		}
 	}
@@ -268,7 +301,7 @@ func validateIntegration(i DiscordIntegration, state State) error {
 			return errors.New("unknown alert rule")
 		}
 	}
-	return nil
+	return validateIntegrationMessages(i)
 }
 
 func (a *App) handleIntegrations(w http.ResponseWriter, r *http.Request) {
@@ -280,7 +313,7 @@ func (a *App) handleIntegrations(w http.ResponseWriter, r *http.Request) {
 	collection := len(parts) == 1 && parts[0] == ""
 	if collection && r.Method == http.MethodGet {
 		snapshot := a.store.Snapshot()
-		integrations, deliveries := []DiscordIntegration{}, []Delivery{}
+		integrations, deliveries := []integrationView{}, []Delivery{}
 		restarts := map[string]RestartOperation{}
 		for id, p := range snapshot.Producers {
 			if p.Restart != nil {
@@ -288,7 +321,7 @@ func (a *App) handleIntegrations(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		for _, i := range snapshot.Integrations {
-			integrations = append(integrations, i)
+			integrations = append(integrations, newIntegrationView(i))
 		}
 		for _, d := range snapshot.Deliveries {
 			deliveries = append(deliveries, d)
@@ -298,39 +331,24 @@ func (a *App) handleIntegrations(w http.ResponseWriter, r *http.Request) {
 		if len(deliveries) > 100 {
 			deliveries = deliveries[:100]
 		}
-		writeJSON(w, http.StatusOK, map[string]any{"integrations": integrations, "deliveries": discordDeliveryViews(deliveries), "rules": alertRules, "pendingRestarts": restarts, "demo": a.demo})
+		catalogue := buildMessageCatalogue()
+		writeJSON(w, http.StatusOK, map[string]any{"integrations": integrations, "deliveries": discordDeliveryViews(deliveries), "rules": alertRules, "pendingRestarts": restarts, "demo": a.demo, "messageDefaults": catalogue.Defaults, "messageVariables": catalogue.Variables, "messageLimits": catalogue.Limits})
 		return
 	}
 	if len(parts) == 3 && parts[1] != "" && parts[2] == "test" && r.Method == http.MethodPost {
-		var delivery Delivery
-		status := http.StatusInternalServerError
-		err := a.store.Update(func(state *State) error {
-			i, ok := state.Integrations[parts[1]]
-			if !ok {
-				status = http.StatusNotFound
-				return errors.New("integration not found")
-			}
-			event := Event{ID: randomID(), Timestamp: time.Now().UTC(), Kind: IntegrationTest, Message: "Integration test", Source: "C2 operator", Accuracy: "observed"}
-			delivery = queueDeliveryForNewEvent(state, i, event)
-			return nil
-		})
-		if err != nil {
-			if status == http.StatusInternalServerError {
-				writeError(w, status, "could not persist test delivery")
-			} else {
-				writeError(w, status, err.Error())
-			}
-			return
-		}
-		writeJSON(w, http.StatusAccepted, delivery)
+		a.handleIntegrationTest(w, r, parts[1])
+		return
+	}
+	if len(parts) == 3 && parts[1] != "" && parts[2] == "preview" && r.Method == http.MethodPost {
+		a.handleMessagePreview(w, r, parts[1])
 		return
 	}
 	if !(collection && r.Method == http.MethodPost) && !(len(parts) == 2 && parts[1] != "" && r.Method == http.MethodPut) {
-		writeError(w, http.StatusMethodNotAllowed, "use GET or POST on integrations, PUT on an integration, or POST on its test route")
+		writeError(w, http.StatusMethodNotAllowed, "use GET or POST on integrations, PUT on an integration, or POST on its test or preview route")
 		return
 	}
 	var input DiscordIntegration
-	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 32<<10))
+	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, integrationBodyLimit))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&input); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid integration JSON; use a Secret reference for authentication")
@@ -354,15 +372,35 @@ func (a *App) handleIntegrations(w http.ResponseWriter, r *http.Request) {
 	status := http.StatusInternalServerError
 	err := a.store.Update(func(state *State) error {
 		if !collection {
-			if _, ok := state.Integrations[input.ID]; !ok {
+			existing, ok := state.Integrations[input.ID]
+			if !ok {
 				status = http.StatusNotFound
 				return errors.New("integration not found")
+			}
+			// A body without the template keys (the legacy form, older clients) keeps the stored templates; an
+			// explicit empty object clears them.
+			if input.Messages == nil {
+				input.Messages = existing.Messages
+			}
+			// Overrides for servers the request removes go with the association, so the legacy form can untick a
+			// server that has one. Overrides the request itself sends are still validated.
+			if input.ServerMessages == nil {
+				for id, set := range existing.ServerMessages {
+					if slices.Contains(input.ServerIDs, id) {
+						if input.ServerMessages == nil {
+							input.ServerMessages = map[string]map[EventKind]MessageTemplate{}
+						}
+						input.ServerMessages[id] = set
+					}
+				}
 			}
 		}
 		if err := validateIntegration(input, *state); err != nil {
 			status = http.StatusBadRequest
 			return err
 		}
+		input = input.cloneMessages()
+		input.normalizeMessages()
 		state.Integrations[input.ID] = input
 		for id, d := range state.Deliveries {
 			if d.IntegrationID == input.ID && (d.Status == DeliveryPending || d.Status == DeliveryRetry) && !deliveryEnabled(input, d) {
@@ -391,5 +429,5 @@ func (a *App) handleIntegrations(w http.ResponseWriter, r *http.Request) {
 }
 
 func deliveryEnabled(i DiscordIntegration, d Delivery) bool {
-	return d.target() == i.target() && i.target().validate() == nil && (d.Event.Kind == IntegrationTest || (i.Enabled && i.Rules[d.Event.Kind] && slices.Contains(i.ServerIDs, d.Event.ServerID)))
+	return d.target() == i.target() && i.target().validate() == nil && (d.Test || d.Event.Kind == IntegrationTest || (i.Enabled && i.Rules[d.Event.Kind] && slices.Contains(i.ServerIDs, d.Event.ServerID) && i.messageEnabled(d.Event.ServerID, d.Event.Kind)))
 }

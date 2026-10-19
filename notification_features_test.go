@@ -47,7 +47,7 @@ func TestJoinEvidenceRequiresConsistentHealthyRosterDelta(t *testing.T) {
 				t.Fatalf("events = %+v", s.Events)
 			}
 			event := s.Events[0]
-			embed, err := renderDiscordEmbed(event)
+			embed, err := renderDiscordEmbed(event, nil)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -85,7 +85,7 @@ func TestRecoveryEvidencePreservesZeroAndUnavailable(t *testing.T) {
 		if *recovered.Evidence.PlayerCount != want {
 			t.Fatalf("count = %+v, want %+v", recovered.Evidence.PlayerCount, want)
 		}
-		embed, _ := renderDiscordEmbed(recovered)
+		embed, _ := renderDiscordEmbed(recovered, nil)
 		wantText := map[int]string{-1: "unavailable/4", 0: "0/4", 3: "3/4"}[count]
 		if len(embed.Fields) != 2 || embed.Fields[1].Value != wantText {
 			t.Fatalf("embed = %+v", embed)

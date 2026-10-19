@@ -257,7 +257,7 @@ func TestDeletionKeepReceiptReloadAndLegacySecrets(t *testing.T) {
 	app, runner := deletionFixture(t, true, false, false)
 	if err := app.store.Update(func(s *State) error {
 		s.Producers["world"] = AlertProducer{Runtime: "deleted-runtime"}
-		s.Integrations["discord"] = DiscordIntegration{ID: "discord", ServerIDs: []string{"world", "neighbor"}}
+		s.Integrations["discord"] = DiscordIntegration{ID: "discord", ServerIDs: []string{"world", "neighbor"}, ServerMessages: map[string]map[EventKind]MessageTemplate{"world": {ServerDown: templateFixture("a", "b", 1)}, "neighbor": {ServerDown: templateFixture("c", "d", 2)}}}
 		for _, status := range []DeliveryStatus{DeliveryPending, DeliveryRetry, DeliverySending, DeliverySent} {
 			s.Deliveries[string(status)] = Delivery{ID: string(status), Event: Event{ServerID: "world"}, Status: status}
 		}
@@ -297,6 +297,9 @@ func TestDeletionKeepReceiptReloadAndLegacySecrets(t *testing.T) {
 	}
 	if !reflect.DeepEqual(state.Integrations["discord"].ServerIDs, []string{"neighbor"}) {
 		t.Fatal("integration targets not cleaned")
+	}
+	if messages := state.Integrations["discord"].ServerMessages; len(messages) != 1 || messages["neighbor"][ServerDown].Title != "c" {
+		t.Fatalf("deleted server kept its message overrides: %+v", messages)
 	}
 	for _, id := range []string{"pending", "retry", "sending"} {
 		if state.Deliveries[id].Status != DeliveryFailed {
