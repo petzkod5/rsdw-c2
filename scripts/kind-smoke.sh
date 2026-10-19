@@ -133,7 +133,7 @@ for ((attempt=0; attempt<45; attempt++)); do
     .metrics.diskCapacityBytes.value > 0 and
     .metrics.inboundBytesPerSecond.status == "available" and
     .metrics.outboundBytesPerSecond.status == "available" and
-    .metrics.tickRate.status == "unsupported" and .metrics.tickRate.value == null and
+    (.metrics | has("tickRate") | not) and
     ([.samples[] | select(.players == 2 and .memoryUsedBytes > 0)] | length >= 2)
   ' "$test_dir/telemetry.json" >/dev/null; then telemetry_ready=true; break; fi
   sleep 2

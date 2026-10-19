@@ -11,7 +11,7 @@ rendered=$(helm template pressure-test "${chart[@]}")
 check_env "$rendered" RSDW_MEMORY_PRESSURE_ENABLED false
 check_env "$rendered" RSDW_MEMORY_PRESSURE_THRESHOLD_PERCENT 85
 check_env "$rendered" RSDW_MEMORY_PRESSURE_DURATION 10m
-rendered=$(helm template pressure-test "${chart[@]}" --set memoryPressure.enabled=true --set-json memoryPressure.thresholdPercent=90.5 --set memoryPressure.duration=1m30s)
+rendered=$(helm template pressure-test "${chart[@]}" --set memoryPressure.enabled=true --set-json memoryPressure.thresholdPercent=90.5 --set memoryPressure.duration=1m30s --set telemetry.metricsInterval=30s)
 check_env "$rendered" RSDW_MEMORY_PRESSURE_ENABLED true
 check_env "$rendered" RSDW_MEMORY_PRESSURE_THRESHOLD_PERCENT 90.5
 check_env "$rendered" RSDW_MEMORY_PRESSURE_DURATION 1m30s

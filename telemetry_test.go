@@ -93,6 +93,7 @@ func TestViewerServerExposesDeletionLifecycleStatus(t *testing.T) {
 }
 
 func TestActualGameTickCapture(t *testing.T) {
+	t.Setenv("RSDW_TICK_METRICS", "true")
 	data, err := os.ReadFile("verification/tick-live-observations.json")
 	if err != nil {
 		t.Fatal(err)
@@ -139,6 +140,7 @@ func TestActualGameTickCapture(t *testing.T) {
 }
 
 func TestServerJSONOmitsLegacyMetricsOnlyWhenMetricsPresent(t *testing.T) {
+	t.Setenv("RSDW_TICK_METRICS", "true")
 	for _, live := range []bool{false, true} {
 		server := Server{ID: "world", Players: 9, ServerPassword: "private-password", AdminPassword: "private-admin"}
 		if live {
@@ -175,6 +177,7 @@ func TestServerJSONOmitsLegacyMetricsOnlyWhenMetricsPresent(t *testing.T) {
 }
 
 func TestHTTPHistoryAndReadOnlyContract(t *testing.T) {
+	t.Setenv("RSDW_TICK_METRICS", "true")
 	app, runner, server := fixtureApp(t)
 	app.auth = &Auth{token: "admin-token"}
 	before, err := os.ReadFile(app.store.path)
@@ -234,7 +237,7 @@ func TestHTTPHistoryAndReadOnlyContract(t *testing.T) {
 				t.Fatalf("wire contract %s", body)
 			}
 			for _, sample := range telemetry.Samples {
-				for _, item := range metricCatalog {
+				for _, item := range activeMetricCatalog() {
 					if _, ok := sample[item.key]; !ok {
 						t.Fatalf("missing nullable key %s", item.key)
 					}
@@ -375,6 +378,7 @@ func TestConcurrentDesiredSettingsSurviveCollection(t *testing.T) {
 }
 
 func TestCollectorDropsObservationSupersededByPendingRollout(t *testing.T) {
+	t.Setenv("RSDW_TICK_METRICS", "true")
 	app, runner, server := fixtureApp(t)
 	blocking := &blockingTelemetryRunner{base: runner, block: "/api/metrics", started: make(chan struct{}), release: make(chan struct{})}
 	app.orchestrator.(*kubeOrchestrator).runner = blocking
@@ -455,7 +459,9 @@ func TestCollectorBoundsWorkersAndStops(t *testing.T) {
 	})
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
-	go func() { app.runCollector(ctx, 15*time.Millisecond); close(done) }()
+	app.telemetryCfg = defaultTelemetryConfig()
+	app.telemetryCfg.LivenessInterval, app.telemetryCfg.MetricsInterval = 15*time.Millisecond, 15*time.Millisecond
+	go func() { app.runCollector(ctx); close(done) }()
 	deadline := time.After(2 * time.Second)
 	for runner.max.Load() < 4 {
 		select {
@@ -476,11 +482,21 @@ func TestCollectorBoundsWorkersAndStops(t *testing.T) {
 }
 
 func TestTickHistoryPreservesProducerTimestampAndGaps(t *testing.T) {
+	t.Setenv("RSDW_TICK_METRICS", "true")
 	app, runner, server := fixtureApp(t)
-	producerNow := time.Now().UTC().Truncate(time.Millisecond)
-	data := tickFixture(producerNow)
+	var producerNow time.Time
+	unsupported := false
 	runner.override = func(call string) ([]byte, error, bool) {
 		if strings.Contains(call, "/api/metrics") {
+			// The producer snapshot is taken when the source is read, so the
+			// age check does not depend on how long the earlier steps took.
+			if producerNow.IsZero() {
+				producerNow = time.Now().UTC().Truncate(time.Millisecond)
+			}
+			data := tickFixture(producerNow)
+			if unsupported {
+				data = strings.Replace(data, `"status":"ready"`, `"status":"unsupported"`, 1)
+			}
 			return []byte(data), nil, true
 		}
 		return nil, nil, false
@@ -495,7 +511,7 @@ func TestTickHistoryPreservesProducerTimestampAndGaps(t *testing.T) {
 			t.Fatal("receipt time replaced producer time")
 		}
 	}
-	data = strings.Replace(data, `"status":"ready"`, `"status":"unsupported"`, 1)
+	unsupported = true
 	app.collectTelemetry(context.Background())
 	got := app.telemetryFor(server, "1h")
 	if len(got.Samples) != 2 {
@@ -518,6 +534,7 @@ func TestTickHistoryPreservesProducerTimestampAndGaps(t *testing.T) {
 }
 
 func TestTickCacheUsesExistingFreshnessWithoutRenewingSource(t *testing.T) {
+	t.Setenv("RSDW_TICK_METRICS", "true")
 	now := time.Now().UTC().Truncate(time.Millisecond)
 	collected := now.Add(-15 * time.Second)
 	metrics := emptyMetrics()
@@ -645,7 +662,7 @@ func TestPlayerRosterExpiresAndNeverFallsBack(t *testing.T) {
 	if other.PlayerRoster.Players != nil {
 		t.Fatal("roster crossed server boundary")
 	}
-	old := time.Now().Add(-time.Minute)
+	old := time.Now().Add(-4 * time.Minute)
 	reading := app.observations().history[server.ID][0].metrics["players"]
 	reading.ObservedAt = &old
 	app.observations().history[server.ID][0].metrics["players"] = reading

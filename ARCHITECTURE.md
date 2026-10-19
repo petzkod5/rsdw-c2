@@ -10,7 +10,7 @@ The service stores one JSON document with these records:
 Server {
   id, name, namespace, release, region,
   ownerId, currentImage, desiredImage,
-  status, players, maxPlayers, tickRate,
+  status, players, maxPlayers,
   cpuPercent, memoryUsedBytes, memoryLimitBytes, diskPercent,
   networkBytesPerSecond, uptimeSeconds, lastRestart, lastSeen,
   updateAvailable, endpoint
@@ -43,7 +43,17 @@ ServerSpec {
 
 `StateStore` reads and writes the JSON document. It serializes writes behind one mutex and writes a temporary file before renaming it into place. A post-rename directory-sync failure poisons the store until restart so a later mutation cannot overwrite a claim whose durable status is uncertain.
 
-`Orchestrator` owns Helm and `kubectl` execution. The demo implementation updates the local state without starting a cluster process. The Kubernetes implementation creates the namespace and API token Secret, then runs `helm upgrade --install` with the chart values required by `rsdragonwilds-helm`. Refresh reads Deployment readiness and image state, then queries the game container's authenticated `/api/health` and `/api/players` endpoints for live readiness, uptime, and player count. Resource metrics remain unavailable until a Kubernetes metrics source is connected.
+`Orchestrator` owns Helm and `kubectl` execution. The demo implementation updates the local state without starting a cluster process. The Kubernetes implementation creates the namespace and API token Secret, then runs `helm upgrade --install` with the chart values required by `rsdragonwilds-helm`. Refresh reads Deployment readiness and image state. Background telemetry is described under Status and telemetry tiers.
+
+## Status and telemetry tiers
+
+The collector runs two loops, each on its own timer, with at most four workers per pass.
+
+The **liveness tier** (every 15 seconds by default) decides `Server.status`. It reads the Deployment and Pod from the Kubernetes API and makes at most one authenticated game `/api/health` probe. Scaled to zero is `stopped`; no Pod or a Pod that is not Ready is `starting`; a Ready Pod whose probe reports the engine ready is `online`; two consecutive failed probes are `attention`. One failed probe, a Kubernetes API error, or a Pod replaced mid-pass leaves the last known status in place. The status is `unknown` only when no liveness pass has succeeded within its freshness window (three liveness intervals, at least 45 seconds).
+
+The **metrics tier** (60 seconds by default, disk every 5 minutes) fills the metric map: CPU and memory from the Metrics API, and players, tick, network, and disk from commands in the game container. Each source has its own toggle and interval. The tier writes readings into the latest observation and cannot change status. Readings carry their own observation time and freshness window, and liveness observations carry them forward until they go stale. Alerts and memory-pressure restarts read the same observations.
+
+Operators configure both tiers with `RSDW_TELEMETRY_*` variables or the chart's `telemetry` values, and `GET /api/bootstrap` returns the effective values as `telemetryConfig`. The tiers, status rules, and configuration table are in [telemetry](docs/telemetry.md).
 
 The HTTP handlers parse requests, call a domain operation, and encode JSON or the embedded web files. They do not contain Helm argument rules or UI-specific state.
 
