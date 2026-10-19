@@ -203,7 +203,7 @@ func TestIntegrationAuthAndCSRF(t *testing.T) {
 	input.ID = ""
 	body := integrationJSON(t, input)
 	before := app.store.Snapshot()
-	for _, route := range [][2]string{{"GET", "/api/integrations"}, {"POST", "/api/integrations"}, {"PUT", "/api/integrations/bot"}, {"POST", "/api/integrations/bot/test"}} {
+	for _, route := range [][2]string{{"GET", "/api/integrations"}, {"POST", "/api/integrations"}, {"PUT", "/api/integrations/bot"}, {"POST", "/api/integrations/bot/test"}, {"POST", "/api/integrations/bot/preview"}} {
 		if r := authRequest(app, route[0], route[1], nil, "", "", body); r.Code != 401 {
 			t.Fatal("anonymous integration access", r.Code)
 		}
