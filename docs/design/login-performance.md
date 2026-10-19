@@ -236,3 +236,43 @@ On a Linux box with Chromium, change `channel: 'msedge'` to the default Chromium
 - [web.dev: Largest Contentful Paint](https://web.dev/articles/lcp) (full-viewport background exclusion; background-image LCP candidates)
 - [web.dev: Optimize resource loading with Fetch Priority](https://web.dev/articles/fetch-priority) (`fetchpriority="high"`; preload for CSS-background LCP images; last updated 2023-11-14)
 - [web.dev: Web Vitals](https://web.dev/articles/vitals) (LCP <= 2.5 s, INP <= 200 ms, CLS <= 0.1 at p75; last updated 2024-10-31)
+
+## Results: Phase 0 shipped
+
+Status: implemented on the current vanilla console (issue #67). Measured with the harness above, unchanged except for one tweak in `AUTHED=1` mode: it no longer waits 90 s for a login button that a signed-in visitor correctly never sees (it now waits at most 50 ms for the button and then times the dashboard). Same machine, Edge 155, real Go binary in token mode, same four network profiles and CPU settings. Before is `origin/main` at `3c88441`; after is the Phase 0 branch. Each cell is one run, so only differences above ~100 ms mean anything. Format: before -> after.
+
+| Profile | Device | CPU | Button painted | First artwork pixels | Artwork fully received | Cold bytes | Warm bytes |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| loopback | desktop | 1x | 101 ms -> 105 ms | 353 ms -> 215 ms | 152 ms -> 65 ms | 10.9 MB -> 241 KB | 10.9 MB -> 661 B |
+| loopback | mobile | 1x | 144 ms -> 106 ms | 350 ms -> 215 ms | 73 ms -> 49 ms | 10.4 MB -> 224 KB | 10.4 MB -> 661 B |
+| broadband-100Mbps-20ms | desktop | 1x | 127 ms -> 171 ms | 1,152 ms -> 260 ms | 1,043 ms -> 210 ms | 10.9 MB -> 241 KB | 10.9 MB -> 661 B |
+| broadband-100Mbps-20ms | mobile | 1x | 181 ms -> 159 ms | 1,142 ms -> 979 ms | 1,029 ms -> 201 ms | 10.4 MB -> 224 KB | 10.4 MB -> 661 B |
+| broadband-25Mbps-40ms | desktop | 1x | 260 ms -> 246 ms | 1,382 ms -> 333 ms | 3,790 ms -> 362 ms | 10.9 MB -> 241 KB | n/a -> n/a |
+| broadband-25Mbps-40ms | mobile | 1x | 259 ms -> 253 ms | 1,376 ms -> 390 ms | 3,605 ms -> 370 ms | 10.4 MB -> 224 KB | n/a -> n/a |
+| broadband-25Mbps-40ms | mobile | 4x | 314 ms -> 370 ms | 1,417 ms -> 475 ms | 3,638 ms -> 480 ms | 10.4 MB -> 224 KB | n/a -> n/a |
+| lte-9Mbps-150ms | desktop | 1x | 630 ms -> 620 ms | 1,854 ms -> 710 ms | 10,319 ms -> 941 ms | 10.9 MB -> 241 KB | n/a -> n/a |
+| lte-9Mbps-150ms | mobile | 1x | 617 ms -> 586 ms | 1,846 ms -> 741 ms | 9,881 ms -> 905 ms | 10.4 MB -> 224 KB | n/a -> n/a |
+| lte-9Mbps-150ms | mobile | 4x | 699 ms -> 745 ms | 1,893 ms -> 898 ms | 9,927 ms -> 1,048 ms | 10.4 MB -> 224 KB | n/a -> n/a |
+
+| Profile (desktop, signed in) | Dashboard visible | Artwork requested | Bytes |
+| --- | --- | --- | --- |
+| loopback | 161 ms -> 120 ms | yes (97 ms to finish) -> no | 10.9 MB -> 79 KB |
+| broadband-25Mbps-40ms | 388 ms -> 376 ms | yes (3,765 ms to finish) -> no | 10.9 MB -> 79 KB |
+| lte-9Mbps-150ms | 1,447 ms -> 1,089 ms | yes (10,302 ms to finish) -> no | 10.9 MB -> 79 KB |
+
+Warm bytes are the repeat visit in the same browser context (HTML revalidated with `If-None-Match`; script, stylesheet and artwork served from cache). Warm cells were only measured on loopback and 100 Mbps, as in the baseline.
+
+### What changed in the numbers
+
+- **Bytes.** Cold login went from 10.9 MB to 241 KB (desktop, 1440 px wide window, 1920 px AVIF) and 224 KB (phone, 1170 px AVIF); the repeat visit went from the full 10.9 MB to 661 B. The signed-in load went from 10.9 MB to 79 KB because the artwork is no longer requested at all.
+- **Artwork.** Fully received at 9 Mbps / 150 ms: 10.3 s -> 0.94 s (desktop) and 9.9 s -> 0.91 s (phone); at 25 Mbps 3.8 s -> 0.36 s. The inline blurred placeholder gives the page its colours at 0.2-0.7 s, before the AVIF arrives and fades in.
+- **"Log In" button.** Essentially unchanged (0.10 s loopback, 0.25 s at 25 Mbps, 0.6-0.75 s at 9 Mbps, 4x CPU included). It was never the multi-second part, and it is still gated on HTML -> script -> `/api/auth`. The 1.0 s lab target for 9 Mbps / 4x CPU holds (745 ms). On every throttled profile the button paints before the artwork finishes (on loopback both land within ~50 ms of each other), and `tests/login-budget.cjs` asserts that ordering deterministically by holding the artwork response.
+- **Signed in.** No artwork request, no login flash (the budget test records any `.login-scene` / `open-login` mutation and fails if one appears). Dashboard visible 161 ms -> 120 ms (loopback) and 1,447 ms -> 1,089 ms (9 Mbps), since the boot shell replaces the extra login-scene render.
+- **Caveat on one cell.** "First artwork pixels" for 100 Mbps / mobile reads 979 ms. The harness classifies screencast frames by how far they differ from the flat page colour, and the dark-blue phone placeholder only crossed its threshold late in that run. The artwork itself was fully received at 201 ms, and the other mobile cells show the placeholder at 0.2-0.9 s.
+
+### Deviations from the plan above
+
+- **No `<link rel=preload>` for the artwork.** The page cannot know it is signed out before `/api/auth` answers (the OIDC session is an HttpOnly cookie and the token mode secret lives in `sessionStorage`), and the Phase 0 requirement is that signed-in visitors never fetch the hero. The `<picture>` is therefore created the moment `/api/auth` reports signed out, with `fetchpriority="high"` and `decoding="async"`; its request starts within a few ms of the button painting (`imgStart` in the table data, e.g. 245 ms vs button 246 ms at 25 Mbps).
+- **WebP fallback is one 1280-px file per art direction** (171 KB desktop, 162 KB phone), not the 1920-px WebP from the prototype (297 KB), so every shipped image stays under the 250 KB budget, which the Go tests enforce. AVIF is q45 for all five sizes; I looked at the 1440 px desktop and 390 px @3x phone renders and saw no banding in the sky, so no q52 bump was needed.
+- **Lighthouse CI is not part of this change.** Issue #67 mentions it; this PR covers the deterministic byte/header budget in Playwright (`tests/login-budget.cjs`, run from `scripts/verify.sh`) only.
+- The artwork is generated by `scripts/build-login-art.cjs` (needs `sharp`, now a pinned devDependency) from the original PNGs, which are no longer in the tree; the script header says how to extract them from history (`f8dffc9`).

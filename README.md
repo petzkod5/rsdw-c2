@@ -77,6 +77,7 @@ Scheduled reboots require the chart's default single replica and persistent stat
 - [Back up and restore worlds](docs/backups.md)
 - [Run a local kind cluster](docs/kind.md)
 - [Set up a development machine](docs/development.md)
+- [Web delivery contract](docs/web-delivery.md)
 - [Read the architecture notes](ARCHITECTURE.md)
 
 ## Check the project

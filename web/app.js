@@ -488,12 +488,28 @@ function clearProtectedState() {
   $('#environment').textContent = '';
   if (!$('#content').querySelector?.('.login-scene')) $('#content').innerHTML = '';
 }
+// The boot shell is hidden once the scene mounts, so hand the announcement and focus to the scene itself.
+// Focus only moves when the user has not already put it somewhere else.
+function announceLoginScene() {
+  const note = $('#boot-shell .boot-note');
+  if (note) note.textContent = 'Sign in required';
+  const heading = $('#login-scene-title');
+  const active = document.activeElement;
+  if (heading && (!active || active === document.body || active.closest?.('#boot-shell'))) {
+    heading.tabIndex = -1;
+    heading.focus({preventScroll:true});
+  }
+}
 /** @typedef {{mode: 'oidc'|'token', signInFailed: boolean, logoutUnconfirmed: boolean}} LoginSceneView */
 
 /** @param {LoginSceneView} view */
 function renderLoginScene(view) {
   if (!$('#content .login-scene')) {
     $('#content').replaceChildren($('#login-scene-template').content.cloneNode(true));
+    const art = $('.login-art-image');
+    if (art.complete && art.naturalWidth) art.classList.add('is-loaded');
+    else art.addEventListener('load', () => art.classList.add('is-loaded'), {once:true});
+    announceLoginScene();
   }
   const status = view.mode === 'oidc' ? 'Sign in with your identity provider to access this cluster.' : 'Sign in with your admin token to access this cluster.';
   const error = view.logoutUnconfirmed ? 'Could not confirm server sign out. Retry sign out before leaving this browser.' : view.signInFailed ? 'Sign in failed or this identity has no assigned role. Contact your administrator or try another identity.' : '';
@@ -503,6 +519,7 @@ function renderLoginScene(view) {
 }
 function lockedState() {
   document.body?.classList.add('auth-locked');
+  document.body?.classList.remove('auth-booting');
   $('.page-controls').hidden = true;
   $('#content').setAttribute('aria-busy','false');
   renderLoginScene({mode:state.authMode === 'oidc' ? 'oidc' : 'token', signInFailed:state.signInFailed, logoutUnconfirmed:!!state.logoutCSRF});
@@ -532,7 +549,7 @@ function applyAuth(auth) {
     $('#login-dialog').close();
   }
   if (!auth.authenticated) { requireLogin(false); return false; }
-  document.body?.classList.remove('auth-locked');
+  document.body?.classList.remove('auth-locked', 'auth-booting');
   Object.assign(state, {identity, authSubject:auth.subject || (auth.mode === 'token' ? 'token-admin' : ''), csrfToken:auth.csrfToken || '', role:auth.role, capabilities:auth.capabilities || {}, authRequired:false});
   if (changed || !validDisplayTimezone()) loadDisplayTimezone();
   $('.page-controls').hidden = false;
@@ -541,12 +558,32 @@ function applyAuth(auth) {
   if (!can(state.page)) state.page = 'dashboard';
   return true;
 }
+// A hung /api/auth would otherwise leave the boot shell up with no way forward. The deadline is a plain
+// timer (not AbortSignal.timeout) so tests can drive it with a fake clock.
+const AUTH_TIMEOUT_MS = 8000;
+async function authRequest(signal) {
+  const request = new AbortController();
+  const abort = () => request.abort();
+  let timedOut = false;
+  if (signal?.aborted) abort();
+  signal?.addEventListener('abort', abort, {once:true});
+  const timer = setTimeout(() => { timedOut = true; abort(); }, AUTH_TIMEOUT_MS);
+  try {
+    return await api('/api/auth', {signal:request.signal});
+  } catch (error) {
+    if (timedOut && !signal?.aborted) throw new Error('Timed out waiting for the server. Check the connection and try again.');
+    throw error;
+  } finally {
+    clearTimeout(timer);
+    signal?.removeEventListener('abort', abort);
+  }
+}
 async function discoverAuth(signal) {
-  let auth = await api('/api/auth', {signal});
+  let auth = await authRequest(signal);
   if (auth.mode === 'oidc' && state.authMode !== 'oidc') {
     state.authMode = 'oidc';
     try { sessionStorage.removeItem(tokenKey); } catch {}
-    auth = await api('/api/auth', {signal});
+    auth = await authRequest(signal);
   }
   return auth;
 }
@@ -1443,6 +1480,7 @@ async function refresh() {
   } catch (error) {
     if (!current() || error.name === 'AbortError') return;
     if (state.authRequired) { lockedState(); return; }
+    document.body?.classList.remove('auth-booting');
     $('#error-banner').textContent = error.message;
     $('#error-banner').hidden = false;
     if (error.telemetryRequest && !telemetryReceived) hideCachedPlayerNames(selectedId);
@@ -2340,5 +2378,4 @@ if (new URLSearchParams(location.search).get('signin') === 'failed') {
   state.signInFailed = true;
   history.replaceState(null, '', location.pathname + location.hash);
 }
-lockedState();
 navigate();
