@@ -4,6 +4,7 @@ const path = require('node:path');
 const {spawn} = require('node:child_process');
 const {once} = require('node:events');
 const {chromium, request: playwrightRequest} = require('playwright');
+const {serverBinary} = require('./fixture-processes.cjs');
 
 // Delivery budget for the login path, run against the real Go binary in token mode.
 // Everything is asserted on bytes, headers and event order; nothing depends on wall-clock timing.
@@ -15,7 +16,7 @@ const root = path.resolve(__dirname, '..');
 fs.mkdirSync(path.join(root, '.tmp'), {recursive:true});
 const output = fs.mkdtempSync(path.join(root, '.tmp/login-budget-'));
 const token = 'login-budget-test-token';
-const binary = process.env.RSDW_TEST_BINARY || path.join(root, '.tmp/rsdw-c2');
+const binary = process.env.RSDW_TEST_BINARY || serverBinary(root);
 const server = spawn(binary, [], {
   cwd:root,
   env:{...process.env, RSDW_AUTH_MODE:'token', RSDW_DEMO_DATA:'true', RSDW_ADMIN_TOKEN:token, RSDW_STATE_FILE:path.join(output, 'state.json'), RSDW_LISTEN_ADDR:'127.0.0.1:0'},
