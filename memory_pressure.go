@@ -47,7 +47,7 @@ func (policy MemoryPressurePolicy) observe(state *State, server Server, o observ
 	if !policy.Enabled || state.deleting(server.ID) || server.Status == StatusStopped || server.Status == StatusDeleting || o.status == StatusStopped || p.Restart != nil {
 		return rebootDispatch{}, nil
 	}
-	if o.runtime == "" || o.at.IsZero() || o.at.After(now) || now.Sub(o.at) > telemetryMaxAge {
+	if o.runtime == "" || o.at.IsZero() || o.at.After(now) || now.Sub(o.at) > o.window() {
 		return rebootDispatch{}, nil
 	}
 	metrics := freshMetrics(o.metrics, now)
@@ -65,7 +65,7 @@ func (policy MemoryPressurePolicy) observe(state *State, server Server, o observ
 	if sampleAt.After(now) {
 		return rebootDispatch{}, nil
 	}
-	if streak == nil || streak.Runtime != o.runtime || o.at.Sub(streak.LastAt) > telemetryMaxAge || streak.SampleAt.IsZero() || sampleAt.Before(streak.SampleAt) || sampleAt.Sub(streak.SampleAt) > telemetryMaxAge {
+	if streak == nil || streak.Runtime != o.runtime || o.at.Sub(streak.LastAt) > o.window() || streak.SampleAt.IsZero() || sampleAt.Before(streak.SampleAt) || sampleAt.Sub(streak.SampleAt) > used.window() {
 		streak = &MemoryPressureState{Runtime: o.runtime, Since: o.at}
 	}
 	advanced := sampleAt.After(streak.SampleAt)

@@ -1,6 +1,6 @@
 # Live telemetry design
 
-The app schedules collection every 15 seconds independently of browser requests. Slow sources and fleets larger than four servers can lengthen the interval. It retains at most one hour in memory. Restarting the dashboard starts a new history, without fabricated backfill.
+The app collects in two tiers independently of browser requests: a liveness loop (every 15 seconds by default) that decides status, and a metrics loop (every 60 seconds by default, disk every 5 minutes) that only fills the metric map. Slow sources and fleets larger than four servers can lengthen an interval. It retains at most one hour in memory. Restarting the dashboard starts a new history, without fabricated backfill. See [telemetry](../docs/telemetry.md) for the tiers, status rules, and configuration.
 
 Candidate A keeps collection and bounded history in the Go process. Candidate B uses a separate Prometheus deployment for scraping and history. A is the base because short dashboard windows do not justify another daemon on this laptop. B's explicit source timestamps and partial-failure treatment are retained. Neither source design produces a real tick rate from the current game API.
 

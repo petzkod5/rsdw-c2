@@ -29,7 +29,7 @@ async function run() {
       let body;
       if (url.pathname === '/api/auth') body = {mode:'oidc',authenticated:true,subject:'viewer',role:'viewer',csrfToken:'session',capabilities:{dashboard:true,telemetry:true}};
       else if (url.pathname === '/api/bootstrap') body = {servers:[server],cluster:'Test'};
-      else if (url.pathname === '/api/servers/world/telemetry') body = {server,metrics:{players:{value:3,status:'available',observedAt:new Date().toISOString()}},playerRoster:{status:'available',freshForMs:45000,players},samples:[]};
+      else if (url.pathname === '/api/servers/world/telemetry') body = {server,metrics:{players:{value:3,status:'available',observedAt:new Date().toISOString()}},playerRoster:{status:'available',freshForMs:120000,freshWindowMs:180000,players},samples:[]};
       else throw new Error(`Unexpected request ${url.pathname}`);
       await route.fulfill({json:body});
     });
@@ -69,7 +69,10 @@ async function run() {
     await page.clock.install();
     await page.getByRole('button',{name:'Refresh data',exact:true}).click();
     await page.waitForFunction(()=>!state.refreshing);
-    await page.clock.fastForward(46000);
+    // A viewer has no polling configuration; the roster stays until the server's freshness time, well past the old 45 second guard.
+    await page.clock.fastForward(100000);
+    assert.equal(await panel.locator('li').count(),3);
+    await page.clock.fastForward(21000);
     assert.match(await panel.innerText(),/Connected players are stale/);
     assert.equal(await panel.locator('li').count(),0);
     assert.deepEqual(errors,[]);

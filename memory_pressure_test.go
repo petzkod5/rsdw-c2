@@ -375,6 +375,9 @@ func TestCollectorPressureClaimPersistsBeforeDispatch(t *testing.T) {
 		t.Run(map[bool]string{false: "dispatch", true: "persistence failure"}[failPersistence], func(t *testing.T) {
 			app, runner, server := fixtureApp(t)
 			app.memoryPressure = MemoryPressurePolicy{Enabled: true, ThresholdPercent: 3.125, Duration: time.Minute}
+			// The first pass fills the memory readings. Pressure is evaluated on
+			// the liveness observations that carry them forward.
+			app.collectTelemetry(context.Background())
 			at := time.Now().UTC().Add(-15 * time.Second)
 			if err := app.store.Update(func(state *State) error {
 				state.Producers[server.ID] = AlertProducer{Runtime: "pod-uid/container-id", LastAt: at, MemoryPressure: &MemoryPressureState{Runtime: "pod-uid/container-id", Since: at.Add(-time.Minute), LastAt: at, SampleAt: at}}
@@ -402,7 +405,7 @@ func TestCollectorPressureClaimPersistsBeforeDispatch(t *testing.T) {
 			if failPersistence {
 				app.store.path = t.TempDir()
 			}
-			app.collectTelemetry(context.Background())
+			app.collectLiveness(context.Background())
 			state := app.store.Snapshot()
 			if failPersistence {
 				if calls != 0 || state.Producers[server.ID].Restart != nil || len(state.Events) != 0 || !state.Producers[server.ID].MemoryPressure.LastAt.Equal(at) {
@@ -412,7 +415,7 @@ func TestCollectorPressureClaimPersistsBeforeDispatch(t *testing.T) {
 				if calls != 1 || state.Producers[server.ID].Restart == nil || !state.Producers[server.ID].Restart.CommandUncertain {
 					t.Fatalf("pressure command = %d, producer = %+v", calls, state.Producers[server.ID])
 				}
-				app.collectTelemetry(context.Background())
+				app.collectLiveness(context.Background())
 				if calls != 1 {
 					t.Fatal("pending pressure command was redispatched")
 				}

@@ -158,6 +158,8 @@ tbody tr.deploying:hover { background: var(--color-nav-current); }
 .console-status .status { font-size: 14px; white-space: normal; }
 .console-label { display: block; font-size: 12px; text-transform: uppercase; color: var(--color-muted-foreground); font-weight: 400; }
 .console-metrics { display: grid; grid-template-columns: .8fr 1fr; gap: 18px; }
+.console-row.no-tick { grid-template-columns: minmax(140px,1.3fr) minmax(130px,.8fr) minmax(110px,.7fr) minmax(180px,1.25fr) minmax(130px,1fr) 130px; }
+.console-row.no-tick .console-metrics { grid-template-columns: 1fr; }
 .console-metrics strong { display: block; font-size: 18px; margin-top: 4px; white-space: nowrap; }
 .console-resources { display: grid; gap: 24px; }
 .console-resource { font-size: 12px; }
@@ -369,7 +371,7 @@ input[type=file]::file-selector-button { font: inherit; border: 1px solid var(--
 #modal-body > p { font-size: 15px; line-height: 1.7; margin-bottom: 20px; }
 #modal-error { margin-top: 16px; flex-shrink: 0; }
 #toast { position: fixed; bottom: 24px; right: 24px; z-index: 20; max-width: min(440px,calc(100% - 48px)); background: var(--color-card); border: 1px solid var(--link); border-radius: 4px; padding: 16px 20px; font-size: 15px; box-shadow: 0 8px 30px #0005; }
-.check-time { display: block; color: var(--color-muted-foreground); font-size: 12px; margin-top: 4px; }
+.check-time, .check-reason { display: block; color: var(--color-muted-foreground); font-size: 12px; margin-top: 4px; }
 .login-token { margin: 20px 0; }
 #login-description { font-size: 15px; line-height: 1.7; }
 .auth-locked .topbar,.auth-locked .sidebar,.auth-locked .page-heading,.auth-locked main > footer { display: none; }
