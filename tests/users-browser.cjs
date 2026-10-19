@@ -4,6 +4,7 @@ const path = require('node:path');
 const {spawn} = require('node:child_process');
 const {once} = require('node:events');
 const {chromium} = require('playwright');
+const {serverBinary} = require('./fixture-processes.cjs');
 
 const root = path.resolve(__dirname, '..');
 fs.mkdirSync(path.join(root, '.tmp'), {recursive:true});
@@ -13,7 +14,7 @@ const token = 'users-browser-test-token';
 const playerID = '0123456789abcdef0123456789abcdef';
 const changedID = '11111111111111111111111111111111';
 const manualID = 'abcdef0123456789abcdef0123456789';
-const server = spawn(path.join(root, '.tmp/rsdw-c2'), [], {
+const server = spawn(serverBinary(root), [], {
   cwd:root,
   env:{...process.env, RSDW_AUTH_MODE:'token', RSDW_DEMO_DATA:'true', RSDW_ADMIN_TOKEN:token, RSDW_STATE_FILE:stateFile, RSDW_LISTEN_ADDR:'127.0.0.1:0'},
   stdio:['ignore','pipe','pipe'],

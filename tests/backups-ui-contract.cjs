@@ -11,7 +11,7 @@ const server = http.createServer((request, response) => {
   const pathname = new URL(request.url, 'http://localhost').pathname;
   const name = pathname === '/' ? 'index.html' : pathname.slice(1);
   const file = path.join(webRoot, name);
-  if (!file.startsWith(webRoot + '/') || !fs.existsSync(file)) { response.writeHead(404).end(); return; }
+  if (!file.startsWith(webRoot + path.sep) || !fs.existsSync(file)) { response.writeHead(404).end(); return; }
   response.setHeader('Content-Type', name.endsWith('.js') ? 'text/javascript' : name.endsWith('.css') ? 'text/css' : 'text/html');
   response.end(fs.readFileSync(file));
 });
@@ -82,9 +82,11 @@ async function main() {
     if (url.endsWith('/create-server')) {assert.match(body.ownerId,/^[a-f0-9]{32}$/);return reply({id:'clone',worldName:body.serverName,name:body.ownerName,status:'stopped'},201);}
     return reply({});
   });
-  const go=async hash=> {await page.goto(base+'/#'+hash);await page.locator('#content[aria-busy="false"]').waitFor();};
+  // closeModal() runs before the follow-up refresh() re-renders the page, so wait for both to finish before touching the new DOM.
+  const settled=()=>page.waitForFunction(()=>!state.modalBusy && !state.refreshing);
+  const go=async hash=> {await page.goto(base+'/#'+hash);await page.locator('#content[aria-busy="false"]').waitFor();await settled();};
   const cancel=()=>page.getByTestId('cancel-modal').click();
-  const save=async()=>{await page.getByTestId('confirm-modal').click();await page.locator('#modal').waitFor({state:'hidden'});};
+  const save=async()=>{await page.getByTestId('confirm-modal').click();await page.locator('#modal').waitFor({state:'hidden'});await settled();};
   const choose=async id=>{await page.locator('[data-action="select-backup-profile"][data-id="'+id+'"]').click();};
   const healthySchedule = {...schedules[1],lastResult:undefined};
   const terminal = {...runs[1],backendId:'local'};
@@ -109,6 +111,7 @@ async function main() {
     healthFixture={runs:scenario.runs,schedules:scenario.schedules || [healthySchedule],available:scenario.available !== false};
     await page.goto(base+'/?health='+encodeURIComponent(scenario.name)+'#backups');
     await page.getByTestId('backup-health').waitFor();
+    await settled();
     assert.equal(await page.locator('.healthy-count').innerText(),scenario.healthy,scenario.name);
     const indicator = page.locator('.health-indicator');
     assert.equal((await indicator.getAttribute('class')).trim(),('health-indicator '+scenario.indicator).trim(),scenario.name);
@@ -221,7 +224,7 @@ async function main() {
   await page.locator('[data-action="edit-backup-schedule"][data-id="hourly"]').click();assert.equal(await page.locator('[name="intervalUnit"]').inputValue(),'hours');await save();assert.equal(schedules.find(s=>s.id==='hourly').intervalUnit,'hours');
   await page.getByTestId('add-backup-schedule').click();await page.getByRole('button',{name:'Add another time'}).click();await page.getByTestId('backup-schedule-time').nth(1).fill('17:00');await page.getByTestId('backup-schedule-confirm').check();await save();assert.deepEqual(schedules.at(-1).dailyTimes,['02:00','17:00']);
   await page.getByTestId('run-schedule-daily').click();assert.match(await page.locator('#modal-body').innerText(),/unchanged/);await save();assert.equal(requests.at(-1).url,'/api/backups/schedules/daily/run');
-  await page.locator('#backup-schedule-menu').selectOption('added');await page.getByTestId('delete-backup-schedule-menu').click();await page.getByTestId('delete-backup-confirm').check();await save();assert.equal(schedules.some(s=>s.id==='added'),false);
+  await page.locator('#backup-schedule-menu').selectOption('added');await page.getByRole('button',{name:'Refresh data',exact:true}).click();await settled();assert.equal(await page.locator('#backup-schedule-menu').inputValue(),'added');await page.getByTestId('delete-backup-schedule-menu').click();await page.getByTestId('delete-backup-confirm').check();await save();assert.equal(schedules.some(s=>s.id==='added'),false);
   await page.screenshot({path:path.join(output,'schedules.png'),fullPage:true});
   runs.push({...runs[0],id:'running-copy',manifestId:'running-manifest',definitionId:'imported',profileName:'Imported running save',source:'running-bak',sourceLabel:'Running .sav.backup',items:[{...captured,sourcePath:'imported.sav.backup'}]});
   await go('maintenance?serverId=stopped');await page.getByTestId('restore-server').click();

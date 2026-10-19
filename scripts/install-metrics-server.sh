@@ -4,6 +4,8 @@ set -euo pipefail
 cluster_name=${1:?Usage: install-metrics-server.sh CLUSTER_NAME}
 [[ $# == 1 && "$cluster_name" =~ ^[a-z0-9]+(-[a-z0-9]+)*$ ]] || exit 2
 export KIND_EXPERIMENTAL_PROVIDER=docker
+# Git Bash on Windows rewrites arguments such as --raw=/readyz as host paths. Keep in-cluster paths intact.
+export MSYS2_ARG_CONV_EXCL='--raw=;RSDW_CHART=;KUBECONFIG='
 for command in docker kind kubectl timeout curl jq; do command -v "$command" >/dev/null; done
 node="${cluster_name}-control-plane"
 nodes=$(timeout 15s docker ps -a --filter "label=io.x-k8s.kind.cluster=$cluster_name" --format '{{.Names}}')
