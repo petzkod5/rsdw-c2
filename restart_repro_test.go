@@ -98,12 +98,24 @@ func TestRestartStatusShowsRestartingThenOfflineThenOnline(t *testing.T) {
 	}
 	app.collectTelemetry(context.Background())
 	shown := func() Status { return app.telemetryFor(app.store.Snapshot().Servers[server.ID], "60s").Server.Status }
+	before := "2026-10-01T05:00:00Z"
+	if err := app.store.Update(func(state *State) error {
+		current := state.Servers[server.ID]
+		current.LastRestart = before
+		state.Servers[server.ID] = current
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
 	dispatch, err := app.claimManualRestart(server.ID, time.Now())
 	if err != nil {
 		t.Fatal(err)
 	}
 	if _, perr := app.dispatchRestartOperation(context.Background(), dispatch); perr != nil {
 		t.Fatal(perr)
+	}
+	if last := app.store.Snapshot().Servers[server.ID].LastRestart; last != before {
+		t.Fatalf("last restart moved to %q when the restart was only requested", last)
 	}
 	app.collectLiveness(context.Background())
 	if got := shown(); got != StatusRestarting {
@@ -127,7 +139,28 @@ func TestRestartStatusShowsRestartingThenOfflineThenOnline(t *testing.T) {
 	if got := shown(); got != StatusOnline {
 		t.Fatalf("ready replacement shows %q, want %q", got, StatusOnline)
 	}
-	if last := app.store.Snapshot().Servers[server.ID].LastRestart; last == "" {
-		t.Fatal("last restart timestamp not recorded")
+	if last := app.store.Snapshot().Servers[server.ID].LastRestart; last == before || last == "" {
+		t.Fatalf("last restart = %q after completion, want it to advance past %q", last, before)
+	}
+}
+
+func TestRestartPhaseKeepsOldRuntimeRestartingWhateverItsStatus(t *testing.T) {
+	op := &RestartOperation{ID: "op", Runtime: "old"}
+	for _, test := range []struct {
+		status Status
+		o      observation
+		want   Status
+	}{
+		{StatusOnline, observation{runtime: "old"}, StatusRestarting},
+		{StatusStarting, observation{runtime: "old"}, StatusRestarting},
+		{StatusAttention, observation{runtime: "old"}, StatusRestarting},
+		{StatusStarting, observation{runtime: "new", restartOperation: "op"}, StatusOffline},
+		{StatusUnknown, observation{}, StatusOffline},
+		{StatusOnline, observation{runtime: "new", restartOperation: "op"}, StatusOnline},
+		{StatusStopped, observation{runtime: "old"}, StatusStopped},
+	} {
+		if got := restartPhase(test.status, test.o, op); got != test.want {
+			t.Errorf("restartPhase(%s, runtime %q) = %s, want %s", test.status, test.o.runtime, got, test.want)
+		}
 	}
 }
