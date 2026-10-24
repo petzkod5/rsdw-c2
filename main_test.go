@@ -668,7 +668,7 @@ func TestCreateChartSettingsAndSecretPrivacy(t *testing.T) {
 		}
 	}
 	server := serverNamed(t, app.store.Snapshot(), "Public name")
-	if server.WorldName != "Separate world" || server.GamePort != 7780 || server.PasswordSecret != server.ID+"-settings" || server.ServerPassword != "" || server.AdminPassword != "" {
+	if server.WorldName != "Separate world" || server.GamePort != 7780 || server.PasswordSecret != server.ID+"-settings" || server.ServerPassword != "" || server.AdminPassword != "" || !strings.HasSuffix(server.CurrentImage, ":0.2.2") {
 		t.Fatalf("settings not preserved or credentials retained: %+v", server)
 	}
 	var helmCall string
@@ -677,7 +677,7 @@ func TestCreateChartSettingsAndSecretPrivacy(t *testing.T) {
 			helmCall = call
 		}
 	}
-	for _, want := range []string{"RSDW_WORLD_NAME=Separate world", "RSDW_ADMINS=admin-1,admin-2", "RSDW_ADDITIONAL_ARGS=-log -ini:Game:[/Script/Engine.GameSession]:MaxPlayers=6", "RSDW_AUTO_STOP_ON_UPDATE=true", "DEBUG=3", "STEAMAPPVALIDATE=1", "server.port=7780,service.port=7780,persistence.size=2Gi,service.type=NodePort", "resources.limits.memory=1536Mi", "resources.limits.cpu=750m", "valueFrom.secretKeyRef.name=" + server.PasswordSecret} {
+	for _, want := range []string{"RSDW_WORLD_NAME=Separate world", "RSDW_ADMINS=admin-1,admin-2", "RSDW_ADDITIONAL_ARGS=-log -ini:Game:[/Script/Engine.GameSession]:MaxPlayers=6", "RSDW_AUTO_STOP_ON_UPDATE=true", "DEBUG=3", "STEAMAPPVALIDATE=1", "server.port=7780,service.port=7780,server.beaconPort=8891,persistence.size=2Gi,service.type=NodePort", "resources.limits.memory=1536Mi", "resources.limits.cpu=750m", "valueFrom.secretKeyRef.name=" + server.PasswordSecret} {
 		if !strings.Contains(helmCall, want) {
 			t.Fatalf("missing chart setting %q", want)
 		}

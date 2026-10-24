@@ -393,7 +393,7 @@ export interface CreateServerRequest {
   worldName?: string;
   /** Default "dragonwilds". Lowercase DNS label. */
   namespace?: string;
-  /** Default RSDW_DEFAULT_IMAGE_TAG (0.1.1). */
+  /** Default RSDW_DEFAULT_IMAGE_TAG (0.2.2). */
   imageTag?: string;
   /** Default 7777. 1024..65535. */
   gamePort?: number;
