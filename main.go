@@ -611,7 +611,7 @@ func newKubeOrchestrator() *kubeOrchestrator {
 	configureInClusterKubeconfig()
 	return &kubeOrchestrator{
 		runner: shellRunner{}, helm: envOr("RSDW_HELM_BIN", "helm"), kubectl: envOr("RSDW_KUBECTL_BIN", "kubectl"),
-		chart: envOr("RSDW_CHART", "oci://ghcr.io/petzkod5/charts/rsdragonwilds"), chartVersion: envOr("RSDW_CHART_VERSION", "0.1.1"), imageRepository: envOr("RSDW_IMAGE_REPOSITORY", "ghcr.io/petzkod5/rsdragonwilds-server"), gameAPIPort: envOr("RSDW_GAME_API_PORT", "8080"),
+		chart: envOr("RSDW_CHART", "oci://ghcr.io/petzkod5/charts/rsdragonwilds"), chartVersion: envOr("RSDW_CHART_VERSION", "0.2.2"), imageRepository: envOr("RSDW_IMAGE_REPOSITORY", "ghcr.io/petzkod5/rsdragonwilds-server"), gameAPIPort: envOr("RSDW_GAME_API_PORT", "8080"),
 	}
 }
 
@@ -750,7 +750,7 @@ func (k *kubeOrchestrator) deploy(ctx context.Context, server Server, stopped bo
 	} {
 		args = append(args, "--set-literal", setting)
 	}
-	args = append(args, "--set", fmt.Sprintf("server.port=%d,service.port=%d,persistence.size=%dGi,service.type=%s", server.GamePort, server.GamePort, server.StorageGiB, server.ServiceType))
+	args = append(args, "--set", fmt.Sprintf("server.port=%d,service.port=%d,server.beaconPort=%d,persistence.size=%dGi,service.type=%s", server.GamePort, server.GamePort, server.GamePort+beaconPortOffset, server.StorageGiB, server.ServiceType))
 	if server.SaveSeed != nil {
 		args = append(args, "--set-literal", "saveSeed.existingClaim="+server.SaveSeed.Claim, "--set-literal", "saveSeed.path="+server.SaveSeed.Path)
 	}
@@ -1498,9 +1498,13 @@ func normalizePlayerID(value string) (string, error) {
 	return strings.ToLower(value), nil
 }
 
+// Each server's beacon port sits at a fixed offset from its game port, so distinct
+// game ports on one node also get distinct beacon ports. 7777 maps to Jagex's default 8888.
+const beaconPortOffset = 1111
+
 func validateCreate(request CreateServerRequest) error {
-	if request.GamePort != 0 && (request.GamePort < 1024 || request.GamePort > 65535) {
-		return errors.New("gamePort must be between 1024 and 65535")
+	if request.GamePort != 0 && (request.GamePort < 1024 || request.GamePort > 65535-beaconPortOffset) {
+		return fmt.Errorf("gamePort must be between 1024 and %d", 65535-beaconPortOffset)
 	}
 	if request.StorageGiB != 0 && (request.StorageGiB < 1 || request.StorageGiB > 2048) {
 		return errors.New("storageGiB must be between 1 and 2048")
