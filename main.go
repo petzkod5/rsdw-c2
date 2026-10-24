@@ -35,13 +35,15 @@ var webHandler = newWebHandler(webRoot)
 type Status string
 
 const (
-	StatusOnline    Status = "online"
-	StatusStarting  Status = "starting"
-	StatusAttention Status = "attention"
-	StatusStopped   Status = "stopped"
-	StatusDeleting  Status = "deleting"
-	StatusStale     Status = "stale"
-	StatusUnknown   Status = "unknown"
+	StatusOnline     Status = "online"
+	StatusStarting   Status = "starting"
+	StatusAttention  Status = "attention"
+	StatusStopped    Status = "stopped"
+	StatusDeleting   Status = "deleting"
+	StatusStale      Status = "stale"
+	StatusUnknown    Status = "unknown"
+	StatusRestarting Status = "restarting"
+	StatusOffline    Status = "offline"
 )
 
 type Server struct {
@@ -264,6 +266,16 @@ func (s *Store) Snapshot() State {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.state.clone()
+}
+
+func (s *Store) pendingRestart(id string) *RestartOperation {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if op := s.state.Producers[id].Restart; op != nil {
+		copied := *op
+		return &copied
+	}
+	return nil
 }
 
 func (s *Store) writable() error {

@@ -283,7 +283,7 @@ function zonedDate(value, zone) {
   return `${formatted} (${selected})`;
 }
 function status(value = 'unknown') {
-  const known = ['online', 'checking', 'starting', 'attention', 'stopped', 'deleting', 'stale', 'unknown', 'warning', 'critical', 'error', 'success', 'healthy', 'enabled', 'disabled'];
+  const known = ['online', 'checking', 'starting', 'restarting', 'offline', 'attention', 'stopped', 'deleting', 'stale', 'unknown', 'warning', 'critical', 'error', 'success', 'healthy', 'enabled', 'disabled'];
   const label = {deleting:'DELETING', stale:'STALE', enabled:'Enabled', disabled:'Disabled'}[value] || value.charAt(0).toUpperCase() + value.slice(1);
   return `<span class="status ${known.includes(value) ? value : 'unknown'}">${escapeHTML(label)}</span>`;
 }
@@ -777,7 +777,7 @@ function dashboardModel() {
     const progress = deployProgress(server);
     return {
       id:server.id, worldName:serverLabel(server), endpoint:can('maintenance') ? endpointText(server) : '',
-      status:displayStatus, statusLabel:displayStatus === 'checking' ? 'Checking' : displayStatus === 'unknown' ? 'Unknown' : server.status === 'attention' ? 'Needs attention' : server.status === 'stopped' ? 'Stopped' : server.status === 'online' ? 'Online' : server.status === 'starting' ? 'Starting' : server.status === 'deleting' ? 'Deleting' : server.status === 'stale' ? 'Stale' : 'Unknown',
+      status:displayStatus, statusLabel:displayStatus === 'checking' ? 'Checking' : displayStatus === 'unknown' ? 'Unknown' : server.status === 'attention' ? 'Needs attention' : server.status === 'stopped' ? 'Stopped' : server.status === 'online' ? 'Online' : server.status === 'starting' ? 'Starting' : server.status === 'restarting' ? 'Restarting' : server.status === 'offline' ? 'Offline' : server.status === 'deleting' ? 'Deleting' : server.status === 'stale' ? 'Stale' : 'Unknown',
       running, attention, update:can('updateCheck') && server.updateAvailable === true,
       players, capacity:server.maxPlayers, playersText:`${players == null ? dashboardMetricText(server, 'players') : number(players)} / ${number(server.maxPlayers)}`,
       tickText:!hasTick(server) ? null : stopped ? 'Stopped' : value('tickRate') == null ? dashboardMetricText(server, 'tickRate', ' TPS') : number(value('tickRate'), ' TPS'),
@@ -785,7 +785,7 @@ function dashboardModel() {
         {label:'Memory',text:memory != null && limit > 0 ? `${number(memory / 1073741824)} / ${number(limit / 1073741824)} GiB` : dashboardMetricText(server, memory == null ? 'memoryUsedBytes' : 'memoryLimitBytes'),percent:memory != null && limit > 0 ? memory / limit * 100 : null},
         {label:'CPU',text:cpu == null ? dashboardMetricText(server, 'cpuPercent') : number(cpu, '%'),percent:cpu},
       ],
-      uptime:duration(value('uptimeSeconds')), schedule,
+      uptime:duration(value('uptimeSeconds')), lastRestart:server.lastRestart ? date(server.lastRestart) : 'Never', schedule,
       actions:stopped ? (can('start') ? ['start'] : []) : running ? ['restart','stop'].filter(can) : [],
       deploying:!!progress && progress.phase !== 'ready' && progress.phase !== 'failed',
     };
@@ -814,7 +814,7 @@ function dashboardRow(row) {
   return `<article class="console-row equal-height ${row.attention ? 'attention' : row.status === 'stopped' ? 'stopped' : ''} ${row.deploying ? 'deploying' : ''}${row.tickText == null ? ' no-tick' : ''}" data-server-id="${escapeHTML(row.id)}">
     <div class="console-badges">${dashboardBadges(row)}</div>
     <div class="console-world"><h3><a class="console-open" href="#servers/${encodeURIComponent(row.id)}" data-testid="view-server" data-id="${escapeHTML(row.id)}">${escapeHTML(row.worldName)}</a></h3>${row.endpoint ? `<small class="mono">${escapeHTML(row.endpoint)}</small>` : ''}</div>
-    <div class="console-status"><span class="status ${escapeHTML(row.status)}">${escapeHTML(row.statusLabel)}</span></div>
+    <div class="console-status"><span class="status ${escapeHTML(row.status)}">${escapeHTML(row.statusLabel)}</span><div class="inline-note" title="Last restart">Restarted ${escapeHTML(row.lastRestart)}</div></div>
     <div class="console-metrics"><div><span class="console-label">Players</span><strong>${escapeHTML(row.playersText)}</strong></div>${row.tickText == null ? '' : `<div><span class="console-label">Tick rate</span><strong class="${['—','Collecting'].includes(row.tickText) ? 'muted' : ''}">${escapeHTML(row.tickText)}</strong></div>`}</div>
     <div class="console-resources" aria-label="Resources">${dashboardResources(row)}</div>
     ${row.schedule.state !== 'restricted' ? `<div class="console-schedule"><span class="console-label">Next reboot</span><span class="${row.schedule.state !== 'scheduled' ? 'muted' : ''}">${escapeHTML(row.schedule.text)}</span></div>` : '<div></div>'}
@@ -823,7 +823,7 @@ function dashboardRow(row) {
 }
 function dashboardTable(rows) {
   const tick = rows.some((row) => row.tickText != null);
-  return `<div class="table-wrap"><table><thead><tr><th>Name</th><th>Status</th><th>Players</th>${tick ? '<th>Tick rate</th>' : ''}<th>Resources</th><th>Uptime</th><th>Actions</th></tr></thead><tbody>${rows.map((row) => `<tr${row.deploying ? ' class="deploying"' : ''}><td><a href="#servers/${encodeURIComponent(row.id)}" data-testid="view-server"><strong>${escapeHTML(row.worldName)}</strong></a>${row.endpoint ? `<small class="mono">${escapeHTML(row.endpoint)}</small>` : ''}${dashboardBadges(row)}</td><td><span class="status ${escapeHTML(row.status)}">${escapeHTML(row.statusLabel)}</span></td><td>${escapeHTML(row.playersText)}</td>${tick ? `<td>${escapeHTML(row.tickText ?? '')}</td>` : ''}<td>${dashboardResources(row)}</td><td class="mono">${escapeHTML(row.uptime)}</td><td class="actions">${dashboardActions(row)}</td></tr>`).join('')}</tbody></table></div>`;
+  return `<div class="table-wrap"><table><thead><tr><th>Name</th><th>Status</th><th>Players</th>${tick ? '<th>Tick rate</th>' : ''}<th>Resources</th><th>Uptime</th><th>Actions</th></tr></thead><tbody>${rows.map((row) => `<tr${row.deploying ? ' class="deploying"' : ''}><td><a href="#servers/${encodeURIComponent(row.id)}" data-testid="view-server"><strong>${escapeHTML(row.worldName)}</strong></a>${row.endpoint ? `<small class="mono">${escapeHTML(row.endpoint)}</small>` : ''}${dashboardBadges(row)}</td><td><span class="status ${escapeHTML(row.status)}">${escapeHTML(row.statusLabel)}</span></td><td>${escapeHTML(row.playersText)}</td>${tick ? `<td>${escapeHTML(row.tickText ?? '')}</td>` : ''}<td>${dashboardResources(row)}</td><td class="mono">${escapeHTML(row.uptime)}<div class="inline-note" title="Last restart">Restarted ${escapeHTML(row.lastRestart)}</div></td><td class="actions">${dashboardActions(row)}</td></tr>`).join('')}</tbody></table></div>`;
 }
 function dashboard() {
   const model = dashboardModel(), summary = model.summary;

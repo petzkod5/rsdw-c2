@@ -590,7 +590,7 @@ function refreshFixture(admin = false, extraCapabilities = {}) {
     fetch:(path,options)=>new Promise((resolve,reject)=>requests.push({path,options,resolve,reject})),
   });
   sandbox.history = {replaceState(_state, _title, hash){sandbox.location.hash = hash;}};
-  vm.runInContext(source.slice(0, source.indexOf("$('#refresh').innerHTML")) + '\nthis.ui = {state, applyAuth, refresh, handleChange, handleAction, logout, navigate, render, serverOverview, maintenance, dashboardModel, selectTelemetry, parseLocationHash, selectedServer, applyRouteScope};', sandbox);
+  vm.runInContext(source.slice(0, source.indexOf("$('#refresh').innerHTML")) + '\nthis.ui = {state, applyAuth, refresh, handleChange, handleAction, logout, navigate, render, serverOverview, maintenance, dashboardModel, dashboardRow, selectTelemetry, parseLocationHash, selectedServer, applyRouteScope};', sandbox);
   const ui = sandbox.ui;
   const auth = {mode:'oidc', authenticated:true, subject:'test', role:admin ? 'admin' : 'viewer', csrfToken:'session', capabilities:{dashboard:true,telemetry:true,logs:admin,...extraCapabilities}};
   ui.applyAuth(auth);
@@ -1354,4 +1354,22 @@ test('tick UI is rendered only when the server reports tickRate', () => {
   assert.match(html, /Tick rate/);
   assert.match(html, /Tick execution duration/);
   assert.match(html, /<td>tickRate<\/td>/);
+});
+
+test('the dashboard shows each restart phase and when the server last restarted', () => {
+  const f = refreshFixture(false,{maintenance:true});
+  for (const [status, label] of [['restarting','Restarting'],['offline','Offline'],['online','Online']]) {
+    f.ui.state.servers = [{id:'a', status, maxPlayers:4, lastRestart:'2026-10-24T05:00:00Z', metrics:{}}];
+    const [row] = f.ui.dashboardModel().rows;
+    assert.equal(row.statusLabel, label);
+    assert.notEqual(row.lastRestart, 'Never');
+    f.ui.state.dashboardView = 'rows';
+    const older = f.ui.dashboardRow(row);
+    assert.ok(older.includes(`Restarted ${row.lastRestart}`), 'row view shows the last restart');
+    f.ui.state.servers[0].lastRestart = '2026-10-24T17:00:00Z';
+    const [newer] = f.ui.dashboardModel().rows;
+    assert.notEqual(newer.lastRestart, row.lastRestart, 'last restart advances');
+    assert.ok(f.ui.dashboardRow(newer).includes(`Restarted ${newer.lastRestart}`));
+    if (status !== 'online') assert.equal(row.actions.length, 0, `no restart or stop while ${status}`);
+  }
 });
