@@ -790,9 +790,10 @@ func (a *App) scanReboots(ctx context.Context, now time.Time) {
 			return
 		}
 		sort.Strings(groups[serverID])
-		if !a.lifecycleMu.TryLock() {
-			continue
-		}
+		// Wait for the lock: liveness, backup, and seed passes hold it for a
+		// state write on the same 15 second cadence, and skipping here let
+		// the occurrence age past rebootLateWindow and be recorded as missed.
+		a.lifecycleMu.Lock()
 		dispatch, err := a.claimScheduledReboots(serverID, groups[serverID])
 		if err != nil {
 			a.lifecycleMu.Unlock()
