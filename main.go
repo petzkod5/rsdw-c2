@@ -35,13 +35,15 @@ var webHandler = newWebHandler(webRoot)
 type Status string
 
 const (
-	StatusOnline    Status = "online"
-	StatusStarting  Status = "starting"
-	StatusAttention Status = "attention"
-	StatusStopped   Status = "stopped"
-	StatusDeleting  Status = "deleting"
-	StatusStale     Status = "stale"
-	StatusUnknown   Status = "unknown"
+	StatusOnline     Status = "online"
+	StatusStarting   Status = "starting"
+	StatusAttention  Status = "attention"
+	StatusStopped    Status = "stopped"
+	StatusDeleting   Status = "deleting"
+	StatusStale      Status = "stale"
+	StatusUnknown    Status = "unknown"
+	StatusRestarting Status = "restarting"
+	StatusOffline    Status = "offline"
 )
 
 type Server struct {
