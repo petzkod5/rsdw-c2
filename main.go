@@ -268,6 +268,16 @@ func (s *Store) Snapshot() State {
 	return s.state.clone()
 }
 
+func (s *Store) pendingRestart(id string) *RestartOperation {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if op := s.state.Producers[id].Restart; op != nil {
+		copied := *op
+		return &copied
+	}
+	return nil
+}
+
 func (s *Store) writable() error {
 	s.mu.RLock()
 	defer s.mu.RUnlock()

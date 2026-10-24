@@ -805,6 +805,7 @@ func (a *App) telemetryFor(server Server, requestedRange string) Telemetry {
 		current = history[len(history)-1]
 	}
 	server = joinObservation(server, current, now)
+	server.Status = restartPhase(server.Status, current, a.store.pendingRestart(server.ID))
 	result := Telemetry{Server: server, Metrics: server.Metrics, MetricsAvailable: server.MetricsAvailable, Samples: []MetricSample{}, HealthChecks: []HealthCheck{}, MetricDefinitions: []MetricDefinition{}}
 	result.PlayerRoster = unavailableRoster("Player count is not currently available")
 	if players := result.Metrics["players"]; players.Status == "available" && players.Value != nil {
@@ -859,4 +860,18 @@ func (a *App) telemetryFor(server Server, requestedRange string) Telemetry {
 		result.HealthChecks = append(result.HealthChecks, HealthCheck{Name: "Kubernetes status check", Status: "error", At: issue.at, Reason: issue.reason + "; showing the last known status"})
 	}
 	return result
+}
+
+// restartPhase keeps the old runtime from reading as online while a restart is
+// pending. The Recreate rollout leaves it serving until Kubernetes stops it.
+func restartPhase(status Status, o observation, op *RestartOperation) Status {
+	switch {
+	case op == nil, status == StatusStopped, status == StatusDeleting, status == StatusStale:
+		return status
+	case status == StatusOnline && o.restartOperation == op.ID && o.runtime != op.Runtime:
+		return StatusOnline
+	case status == StatusOnline:
+		return StatusRestarting
+	}
+	return StatusOffline
 }
