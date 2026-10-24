@@ -668,7 +668,7 @@ func TestCreateChartSettingsAndSecretPrivacy(t *testing.T) {
 		}
 	}
 	server := serverNamed(t, app.store.Snapshot(), "Public name")
-	if server.WorldName != "Separate world" || server.GamePort != 7780 || server.PasswordSecret != server.ID+"-settings" || server.ServerPassword != "" || server.AdminPassword != "" {
+	if server.WorldName != "Separate world" || server.GamePort != 7780 || server.PasswordSecret != server.ID+"-settings" || server.ServerPassword != "" || server.AdminPassword != "" || !strings.HasSuffix(server.CurrentImage, ":0.2.2") {
 		t.Fatalf("settings not preserved or credentials retained: %+v", server)
 	}
 	var helmCall string
