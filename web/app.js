@@ -59,7 +59,7 @@ const state = {
   routeScope: false,
   deployWatches: {},
   dashboardView: 'rows',
-  page: 'dashboard', integrationView: 'hub', servers: [], events: [], users: [], serverId: '', fleetFilter: 'all',
+  page: 'dashboard', integrationView: 'hub', servers: [], events: [], users: [], serverId: '', pageServers: {}, fleetFilter: 'all',
   integrations: [], deliveries: [], alertRules: [], pendingRestarts: {}, integrationsDemo: false, modalIntegrationId: '',
   reboots: [], rebootHistory: [], rebootsAvailable: true, rebootsDemo: false, displayTimezone: '', authSubject: '', modalRebootId: '', previewSequence: 0,
   backups: [], backupProfiles: [], backupSchedules: [], backupStorage: [], backupAvailable: false, backupDemo: false, backupLimits: {}, backupView: 'overview', backupProfileQuery: '', backupProfileType: 'all', selectedBackupProfileId: '', backupServerFilter: '', backupAttentionOnly: false, modalBackupProfileRevision: 1, modalBackupId: '', modalBackupScheduleId: '', backupScheduleMenuId: '',
@@ -105,8 +105,9 @@ function scopedHash(page, id = state.serverId) {
 function applyRouteScope() {
   const route = parseLocationHash(location.hash);
   state.routeScope = route.scoped === true;
-  if (route.serverId !== undefined) state.serverId = route.serverId;
   if (route.page === 'servers' && can('telemetry')) state.page = 'servers';
+  if (state.routeScope) state.pageServers[route.page] = route.serverId;
+  state.serverId = state.pageServers[state.page] || '';
 }
 function validateOverviewRoute() {
   const route = parseLocationHash(location.hash);
@@ -469,7 +470,7 @@ function clearProtectedState() {
   clearTimeout(searchTimer);
   clearTimeout(toastTimer);
   clearTimeout(rosterExpiryTimer);
-  Object.assign(state, {servers:[], events:[], users:[], telemetry:null, telemetryCache:new Map(), rosterObservation:'', rosterDeadline:0, logs:'', query:'', category:'', eventRange:'24h', eventTotal:0, eventWarnings:0, eventCritical:0, logQuery:'', serverId:'', routeScope:false, selectedEventId:'', loaded:false, lastUpdated:null, modalAction:'', modalServerId:'', modalUserId:'', modalBusy:false, modalInitialSettings:{}, modalRebootId:'', identity:'', authSubject:'', csrfToken:'', capabilities:{}, role:'denied', displayTimezone:'', previewSequence:0, deployWatches:{}});
+  Object.assign(state, {servers:[], events:[], users:[], telemetry:null, telemetryCache:new Map(), rosterObservation:'', rosterDeadline:0, logs:'', query:'', category:'', eventRange:'24h', eventTotal:0, eventWarnings:0, eventCritical:0, logQuery:'', serverId:'', pageServers:{}, routeScope:false, selectedEventId:'', loaded:false, lastUpdated:null, modalAction:'', modalServerId:'', modalUserId:'', modalBusy:false, modalInitialSettings:{}, modalRebootId:'', identity:'', authSubject:'', csrfToken:'', capabilities:{}, role:'denied', displayTimezone:'', previewSequence:0, deployWatches:{}});
   Object.assign(state, {integrations:[], deliveries:[], alertRules:[], pendingRestarts:{}, integrationsDemo:false, modalIntegrationId:'', reboots:[], rebootHistory:[], rebootsAvailable:true, rebootsDemo:false, backups:[], backupProfiles:[], backupSchedules:[], backupStorage:[], backupAvailable:false, backupDemo:false, backupLimits:{}, backupProfileQuery:'', backupProfileType:'all', selectedBackupProfileId:'', backupServerFilter:'', backupAttentionOnly:false, modalBackupId:'', modalBackupScheduleId:''});
   $('#modal').close();
   $('#modal-body').innerHTML = '';
@@ -1332,7 +1333,7 @@ async function previewReboot() {
   }
 }
 function navHTML() {
-  return Object.entries(pages).filter(([page]) => page !== 'servers' && can(page)).map(([page,[label]])=>`<a href="${escapeHTML(['telemetry','maintenance','events','reboots'].includes(page) ? scopedHash(page) : `#${page}`)}" data-testid="nav-${page}" title="${escapeHTML(label)}" ${page===state.page?'aria-current="page"':''}>${icon(page)}<span class="nav-label">${escapeHTML(label)}</span></a>`).join('');
+  return Object.entries(pages).filter(([page]) => page !== 'servers' && can(page)).map(([page,[label]])=>`<a href="${escapeHTML(['telemetry','maintenance','events','reboots'].includes(page) ? scopedHash(page, state.pageServers[page] || '') : `#${page}`)}" data-testid="nav-${page}" title="${escapeHTML(label)}" ${page===state.page?'aria-current="page"':''}>${icon(page)}<span class="nav-label">${escapeHTML(label)}</span></a>`).join('');
 }
 function render() {
   if (state.authRequired) { lockedState(); return; }
@@ -2022,7 +2023,7 @@ async function submitModal(event) {
     if (action === 'add-server') {
       const created = rememberCreatedServer(result);
       beginDeployWatch(created);
-      state.serverId = created.id;
+      state.serverId = state.pageServers.maintenance = created.id;
       state.modalBusy = false;
       closeModal();
       notice(message);
@@ -2313,7 +2314,7 @@ function handleChange(event) {
   if (event.target.id === 'backup-profile-type') { state.backupProfileType = event.target.value; render(); }
   if (event.target.name === 'profileName' || event.target.name === 'serverType' || event.target.closest?.('[data-profile-item-row]')) updateBackupProfilePreview();
   if (event.target.id === 'server-filter') {
-    state.serverId = event.target.value; selectTelemetry(selectedServer()?.id); state.logs = ''; state.selectedEventId = '';
+    state.serverId = state.pageServers[state.page] = event.target.value; selectTelemetry(selectedServer()?.id); state.logs = ''; state.selectedEventId = '';
     if (['telemetry','maintenance','events','reboots'].includes(state.page)) {
       state.routeScope = Boolean(state.serverId);
       history.replaceState(null, '', scopedHash(state.page));
