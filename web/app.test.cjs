@@ -1355,3 +1355,14 @@ test('tick UI is rendered only when the server reports tickRate', () => {
   assert.match(html, /Tick execution duration/);
   assert.match(html, /<td>tickRate<\/td>/);
 });
+
+test('the dashboard shows each restart phase and when the server last restarted', () => {
+  const f = refreshFixture(false,{maintenance:true});
+  for (const [status, label] of [['restarting','Restarting'],['offline','Offline'],['online','Online']]) {
+    f.ui.state.servers = [{id:'a', status, maxPlayers:4, lastRestart:'2026-10-24T05:00:00Z', metrics:{}}];
+    const [row] = f.ui.dashboardModel().rows;
+    assert.equal(row.statusLabel, label);
+    assert.notEqual(row.lastRestart, 'Never');
+    if (status !== 'online') assert.equal(row.actions.length, 0, `no restart or stop while ${status}`);
+  }
+});
