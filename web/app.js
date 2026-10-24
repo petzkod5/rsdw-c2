@@ -814,7 +814,7 @@ function dashboardRow(row) {
   return `<article class="console-row equal-height ${row.attention ? 'attention' : row.status === 'stopped' ? 'stopped' : ''} ${row.deploying ? 'deploying' : ''}${row.tickText == null ? ' no-tick' : ''}" data-server-id="${escapeHTML(row.id)}">
     <div class="console-badges">${dashboardBadges(row)}</div>
     <div class="console-world"><h3><a class="console-open" href="#servers/${encodeURIComponent(row.id)}" data-testid="view-server" data-id="${escapeHTML(row.id)}">${escapeHTML(row.worldName)}</a></h3>${row.endpoint ? `<small class="mono">${escapeHTML(row.endpoint)}</small>` : ''}</div>
-    <div class="console-status"><span class="status ${escapeHTML(row.status)}">${escapeHTML(row.statusLabel)}</span></div>
+    <div class="console-status"><span class="status ${escapeHTML(row.status)}">${escapeHTML(row.statusLabel)}</span><div class="inline-note" title="Last restart">Restarted ${escapeHTML(row.lastRestart)}</div></div>
     <div class="console-metrics"><div><span class="console-label">Players</span><strong>${escapeHTML(row.playersText)}</strong></div>${row.tickText == null ? '' : `<div><span class="console-label">Tick rate</span><strong class="${['—','Collecting'].includes(row.tickText) ? 'muted' : ''}">${escapeHTML(row.tickText)}</strong></div>`}</div>
     <div class="console-resources" aria-label="Resources">${dashboardResources(row)}</div>
     ${row.schedule.state !== 'restricted' ? `<div class="console-schedule"><span class="console-label">Next reboot</span><span class="${row.schedule.state !== 'scheduled' ? 'muted' : ''}">${escapeHTML(row.schedule.text)}</span></div>` : '<div></div>'}

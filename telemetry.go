@@ -868,10 +868,10 @@ func restartPhase(status Status, o observation, op *RestartOperation) Status {
 	switch {
 	case op == nil, status == StatusStopped, status == StatusDeleting, status == StatusStale:
 		return status
-	case status == StatusOnline && o.restartOperation == op.ID && o.runtime != op.Runtime:
-		return StatusOnline
-	case status == StatusOnline:
+	case o.runtime != "" && o.runtime == op.Runtime, status == StatusOnline && o.restartOperation != op.ID:
 		return StatusRestarting
+	case status == StatusOnline:
+		return StatusOnline
 	}
 	return StatusOffline
 }

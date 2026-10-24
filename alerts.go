@@ -100,7 +100,7 @@ func observeAlerts(state *State, server Server, o observation, now time.Time) {
 			finishRebootOccurrences(state, op.ID, rebootCompleted, "Replacement runtime is ready", o.at)
 			p.Restart, p.Runtime, p.HealthyBaseline = nil, o.runtime, true
 			current := state.Servers[server.ID]
-			current.Status, current.StopSource = StatusOnline, ""
+			current.Status, current.StopSource, current.LastRestart = StatusOnline, "", o.at.Format(time.RFC3339Nano)
 			state.Servers[server.ID] = current
 		} else if o.at.Sub(op.RequestedAt) >= restartTimeout && o.health != "" {
 			emitAlert(state, server, RestartFailed, op.ID, "No ready marked replacement confirmed within the restart deadline", o.at)
