@@ -1434,7 +1434,8 @@ function syncLogStream() {
   const view = state.logView;
   const server = selectedServer();
   if (state.page !== 'logs' || !server || server.status === 'stopped' || !can('logs')) {
-    if (view.controller) stopLogStream();
+    // Clear the key even when the stream already ended, so coming back opens a fresh one.
+    if (view.key) stopLogStream();
     return;
   }
   const output = $('#log-stream-output');

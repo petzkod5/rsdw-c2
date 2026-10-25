@@ -90,6 +90,11 @@ async function run() {
     const opened = streams.length;
     await page.waitForTimeout(300);
     assert.equal(streams.length, opened, 'stream kept reopening after leaving the logs page');
+    await page.getByTestId('nav-logs').click();
+    await page.waitForFunction(() => state.page === 'logs');
+    await page.waitForFunction(() => document.querySelector('[data-testid="log-stream-output"]').textContent.includes('batch 9'));
+    assert.equal(streams.length, opened + 1, 'returning to logs did not open a fresh stream');
+    assert.doesNotMatch(await output(), /batch 8/, 'stale lines stayed after returning to logs');
 
     role = 'viewer';
     await page.goto('http://logs.test/#logs');
