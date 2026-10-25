@@ -1009,6 +1009,7 @@ type App struct {
 	telemetry      *telemetryStore
 	clock          func() time.Time
 	backups        *backupController
+	logStreams     logStreamLimiter
 }
 
 func (a *App) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -1358,6 +1359,12 @@ func (a *App) handleServerRoute(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"server": server, "lines": lines})
+		return
+	}
+	if len(parts) == 3 && parts[1] == "logs" && parts[2] == "stream" && r.Method == http.MethodGet {
+		if !rejectStopped(w, server) {
+			a.handleLogStream(w, r, server)
+		}
 		return
 	}
 	if len(parts) == 2 && parts[1] == "telemetry" && r.Method == http.MethodGet {
