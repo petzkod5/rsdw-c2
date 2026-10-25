@@ -302,6 +302,9 @@ button.event-message:hover:not(:disabled),button.event-message:active:not(:disab
 .resource-header { display: flex; justify-content: space-between; gap: 12px; }
 .resource-header span { color: var(--color-muted-foreground); }
 .log-console { background: var(--color-log-console); border: 1px solid var(--color-border); border-radius: 4px; padding: 18px; font: 13px/1.9 ui-monospace,monospace; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 340px; overflow: auto; margin: 0; color: var(--color-muted-foreground); }
+.log-stream { max-height: 65vh; min-height: 320px; }
+.log-controls { flex-wrap: wrap; gap: 16px; }
+.log-control { display: inline-flex; align-items: center; gap: 8px; }
 .action-grid { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 12px; margin-top: 24px; }
 .action-card { padding: 14px 12px; border: 1px solid var(--color-border); border-radius: 4px; background: var(--color-muted); }
 .action-card:has(button.danger) { border-color: var(--color-destructive); background: var(--color-card); }
@@ -483,6 +486,7 @@ input[type=file]::file-selector-button { font: inherit; border: 1px solid var(--
   #toast { left: 16px; right: 16px; bottom: 16px; max-width: none; }
 }
 @media (max-width: 520px) {
+  nav { overflow-x: auto; }
   nav a { position: relative; min-width: var(--control-min-size); min-height: var(--control-min-size); justify-content: center; }
   .nav-label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; }
 }
