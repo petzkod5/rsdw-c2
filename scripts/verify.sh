@@ -32,6 +32,7 @@ node tests/oidc-browser.cjs
 node tests/settings-browser.cjs
 node tests/player-roster-browser.cjs
 node tests/stop-browser.cjs
+node tests/server-scope-browser.cjs
 node tests/dashboard-browser.cjs
 node tests/login-budget.cjs
 node tests/backups-browser.cjs

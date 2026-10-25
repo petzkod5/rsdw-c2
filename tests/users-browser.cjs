@@ -188,7 +188,7 @@ async function run() {
   assert.equal(saved().servers[created.id].ownerId, playerID);
   assert.equal(saved().servers[created.id].adminIds, `${playerID},${manualID}`);
   assert.equal(await page.locator('#modal').isVisible(), false);
-  assert.equal(new URL(page.url()).hash, '#maintenance');
+  assert.equal(new URL(page.url()).hash, `#maintenance?serverId=${created.id}`);
   await page.getByTestId('deploy-progress').waitFor();
   assert.equal(await page.getByTestId('deploy-progress').getAttribute('data-phase'), 'ready');
 

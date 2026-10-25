@@ -62,6 +62,7 @@ async function run() {
     assert.equal(await row.getByTestId('view-server').textContent(), label);
   }
   await page.getByTestId('nav-maintenance').click();
+  await page.waitForFunction(() => state.page === 'maintenance');
   await select.selectOption('petzko-02');
   await page.locator('.panel-heading p').filter({hasText:'PC2-US-EAST-02'}).waitFor();
   const retained = page.getByTestId('deletion-receipts');
