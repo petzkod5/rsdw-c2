@@ -61,6 +61,30 @@ async function run() {
     assert.equal(await filter(), 'brin', 'deep link scope ignored');
     await go('nav-dashboard');
     assert.equal(await filter(), 'aurora');
+
+    await page.goto('http://scope.test/#telemetry?serverId=cinder');
+    await settle();
+    await go('nav-dashboard');
+    servers.splice(2, 1);
+    await page.locator('#refresh').click();
+    await settle();
+    assert.equal(await page.getByTestId('nav-telemetry').getAttribute('href'), '#telemetry', 'deleted server still remembered');
+    await go('nav-telemetry');
+    assert.equal(await filter(), 'aurora', 'Metrics stuck on a deleted server');
+    assert.doesNotMatch(await page.locator('#content').innerText(), /No servers registered/);
+
+    servers.push({id:'cinder', worldName:'cinder', status:'online', maxPlayers:4, endpoint:'10.0.0.2:7777', metrics:{}});
+    await page.locator('#refresh').click();
+    await settle();
+    assert.equal(await page.getByTestId('nav-telemetry').getAttribute('href'), '#telemetry', 're-added server silently re-filtered Metrics');
+
+    await page.goto('http://scope.test/#telemetry');
+    await settle();
+    await page.locator('#server-filter').selectOption('brin');
+    await settle();
+    await page.evaluate(() => { location.hash = '#telemetry'; });
+    await page.waitForFunction(() => location.hash === '#telemetry?serverId=brin');
+    assert.equal(await filter(), 'brin', 'plain #telemetry did not show the remembered pick in the URL');
   } finally {
     await browser.close();
   }
