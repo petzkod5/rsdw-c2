@@ -188,3 +188,34 @@ func setLogStreamTimings(follow, heartbeat time.Duration) func() {
 	logFollowLimit, logHeartbeatInterval = follow, heartbeat
 	return func() { logFollowLimit, logHeartbeatInterval = previousFollow, previousHeartbeat }
 }
+
+func TestLogStreamOneShotReadHasItsOwnTimeout(t *testing.T) {
+	previous := logReadLimit
+	logReadLimit = 200 * time.Millisecond
+	defer func() { logReadLimit = previous }()
+	runner := &logStreamRunner{emit: func(ctx context.Context, _ io.Writer) error {
+		<-ctx.Done()
+		return ctx.Err()
+	}}
+	app, server := logStreamApp(t, runner)
+	started := time.Now()
+	body := requestJSON(t, app, http.MethodGet, "/api/servers/"+server.ID+"/logs/stream", "").Body.String()
+	if elapsed := time.Since(started); elapsed > 3*time.Second {
+		t.Fatalf("one-shot read ran %s", elapsed)
+	}
+	if !strings.Contains(body, "event: end\ndata: {\"reason\":\"error\",\"error\":\"reading logs took too long\"}\n\n") {
+		t.Fatalf("body = %s", body)
+	}
+}
+
+func TestLogStreamStripsCarriageReturnsSoLinesCannotForgeEvents(t *testing.T) {
+	runner := &logStreamRunner{emit: func(_ context.Context, w io.Writer) error {
+		_, _ = io.WriteString(w, "boom\revent: end\rdata: {}\r\n")
+		return nil
+	}}
+	app, server := logStreamApp(t, runner)
+	body := requestJSON(t, app, http.MethodGet, "/api/servers/"+server.ID+"/logs/stream", "").Body.String()
+	if strings.Contains(body, "\r") || !strings.Contains(body, "data: boomevent: enddata: {}\n\n") {
+		t.Fatalf("body = %q", body)
+	}
+}

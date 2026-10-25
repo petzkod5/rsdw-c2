@@ -27,6 +27,7 @@ const (
 var (
 	logFollowLimit       = 15 * time.Minute
 	logHeartbeatInterval = 20 * time.Second
+	logReadLimit         = time.Minute
 	logContainers        = map[string]bool{"server": true, "metrics": true}
 )
 
@@ -166,7 +167,9 @@ func (s *sseLogWriter) Write(p []byte) (int, error) {
 }
 
 func (s *sseLogWriter) line(raw []byte, truncated bool) {
-	text := strings.ToValidUTF8(strings.TrimSuffix(string(raw), "\r"), "")
+	// A bare \r ends an SSE line, so a log line carrying one could start a
+	// forged field such as "event: end".
+	text := strings.ReplaceAll(strings.ToValidUTF8(string(raw), ""), "\r", "")
 	if truncated {
 		text += " [truncated]"
 	}
@@ -216,10 +219,13 @@ func (a *App) handleLogStream(w http.ResponseWriter, r *http.Request, server Ser
 	}
 	defer a.logStreams.release(subject)
 
-	ctx, cancel := context.WithCancel(r.Context())
+	// A one-shot read gets its own short bound so a stalled kubectl cannot hold
+	// a stream slot until the write deadline.
+	limit := logReadLimit
 	if req.Follow {
-		ctx, cancel = context.WithTimeout(r.Context(), logFollowLimit)
+		limit = logFollowLimit
 	}
+	ctx, cancel := context.WithTimeout(r.Context(), limit)
 	defer cancel()
 	rc := http.NewResponseController(w)
 	// The server's 2 minute WriteTimeout would otherwise cut a follow short.
@@ -250,6 +256,8 @@ func (a *App) handleLogStream(w http.ResponseWriter, r *http.Request, server Ser
 		return
 	case req.Follow && errors.Is(ctx.Err(), context.DeadlineExceeded):
 		out.end("timeout", nil)
+	case errors.Is(ctx.Err(), context.DeadlineExceeded):
+		out.end("error", errors.New("reading logs took too long"))
 	case err != nil:
 		out.end("error", err)
 	default:
