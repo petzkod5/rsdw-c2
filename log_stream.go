@@ -141,11 +141,17 @@ type sseLogWriter struct {
 	rc       *http.ResponseController
 	partial  []byte
 	skipping bool
+	// closed drops output from an exec copy goroutine that outlives Run when
+	// WaitDelay expires, so nothing writes to the response after the handler.
+	closed bool
 }
 
 func (s *sseLogWriter) Write(p []byte) (int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.closed {
+		return len(p), nil
+	}
 	for _, b := range p {
 		if b == '\n' {
 			if !s.skipping {
@@ -181,6 +187,12 @@ func (s *sseLogWriter) send(chunk string) {
 	defer s.mu.Unlock()
 	io.WriteString(s.w, chunk)
 	s.rc.Flush()
+}
+
+func (s *sseLogWriter) close() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.closed = true
 }
 
 func (s *sseLogWriter) end(reason string, err error) {
@@ -237,7 +249,9 @@ func (a *App) handleLogStream(w http.ResponseWriter, r *http.Request, server Ser
 	out.send(": stream open\n\n")
 
 	heartbeatDone := make(chan struct{})
+	heartbeatStopped := make(chan struct{})
 	go func() {
+		defer close(heartbeatStopped)
 		ticker := time.NewTicker(logHeartbeatInterval)
 		defer ticker.Stop()
 		for {
@@ -250,7 +264,9 @@ func (a *App) handleLogStream(w http.ResponseWriter, r *http.Request, server Ser
 		}
 	}()
 	err = streamer.StreamLogs(ctx, server, req, out)
+	out.close()
 	close(heartbeatDone)
+	<-heartbeatStopped
 	switch {
 	case r.Context().Err() != nil:
 		return

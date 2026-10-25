@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"reflect"
 	"strings"
 	"sync"
@@ -217,5 +218,31 @@ func TestLogStreamStripsCarriageReturnsSoLinesCannotForgeEvents(t *testing.T) {
 	body := requestJSON(t, app, http.MethodGet, "/api/servers/"+server.ID+"/logs/stream", "").Body.String()
 	if strings.Contains(body, "\r") || !strings.Contains(body, "data: boomevent: enddata: {}\n\n") {
 		t.Fatalf("body = %q", body)
+	}
+}
+
+func TestLogStreamRejectsSignedInViewer(t *testing.T) {
+	app, issuer := oidcTestApp(t)
+	runner := &logStreamRunner{}
+	app.orchestrator = &kubeOrchestrator{runner: runner, kubectl: "kubectl"}
+	cookie, _ := loginAs(t, app, issuer, "viewer")
+	res := authRequest(app, "GET", "/api/servers/scuffedtards/logs/stream?follow=1", cookie, "", "", "")
+	if res.Code != http.StatusForbidden {
+		t.Fatalf("viewer log stream = %d: %s", res.Code, res.Body.String())
+	}
+	if call := runner.lastCall(); call != nil {
+		t.Fatalf("viewer request ran kubectl: %v", call)
+	}
+}
+
+func TestLogStreamWriterDropsOutputAfterClose(t *testing.T) {
+	recorder := httptest.NewRecorder()
+	out := &sseLogWriter{w: recorder, rc: http.NewResponseController(recorder)}
+	out.close()
+	if n, err := out.Write([]byte("late line\n")); n != 10 || err != nil {
+		t.Fatalf("Write after close = %d, %v", n, err)
+	}
+	if body := recorder.Body.String(); body != "" {
+		t.Fatalf("late output reached the response: %q", body)
 	}
 }
