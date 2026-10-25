@@ -107,6 +107,10 @@ function applyRouteScope() {
   state.routeScope = route.scoped === true;
   if (route.page === 'servers' && can('telemetry')) state.page = 'servers';
   if (state.routeScope) state.pageServers[route.page] = route.serverId;
+  else if (state.pageServers[state.page] && route.page === state.page && ['telemetry','maintenance','events','reboots'].includes(state.page)) {
+    state.routeScope = true;
+    history.replaceState(null, '', scopedHash(state.page, state.pageServers[state.page]));
+  }
   state.serverId = state.pageServers[state.page] || '';
 }
 function validateOverviewRoute() {
@@ -114,7 +118,8 @@ function validateOverviewRoute() {
   if (route.page === 'servers' && (route.malformed || !state.servers.some((server) => server.id === state.serverId))) {
     state.routeError = `Server overview unavailable: ${route.malformed || !state.serverId ? 'malformed server ID' : `unknown server ID "${state.serverId}"`}.`;
     state.page = 'dashboard';
-    state.serverId = '';
+    delete state.pageServers.servers;
+    state.serverId = state.pageServers.dashboard || '';
     state.routeScope = false;
     clearTelemetry();
     history.replaceState(null, '', '#dashboard');
@@ -1430,13 +1435,13 @@ async function refresh() {
     if (!current()) return;
     if (!Array.isArray(bootstrap.servers)) throw new Error('The server inventory response is missing. Please refresh to try again.');
     state.servers = bootstrap.servers;
+    for (const [key, id] of Object.entries(state.pageServers)) if (!state.servers.some((server) => server.id === id)) delete state.pageServers[key];
     pruneTelemetryCache(state.servers);
     state.deletions = bootstrap.deletions || {};
     state.loaded = true;
     applyRouteScope();
     validateOverviewRoute();
     page = state.page;
-    if (!state.routeScope && state.serverId && !state.servers.some((server) => server.id === state.serverId)) state.serverId = '';
     if (selectedId !== selectedServer()?.id) { selectTelemetry(selectedServer()?.id); state.logs = ''; render(); }
     serverId = state.serverId;
     selectedId = selectedServer()?.id;
@@ -2028,7 +2033,7 @@ async function submitModal(event) {
       closeModal();
       notice(message);
       if (parseLocationHash(location.hash).page === 'maintenance') await refresh();
-      else location.hash = 'maintenance';
+      else location.hash = scopedHash('maintenance', created.id);
       return;
     }
     state.modalBusy = false;
