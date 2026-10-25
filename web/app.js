@@ -8,10 +8,12 @@ const PATTERN = Object.freeze({
   snowflake: '[0-9]{1,20}',
 });
 const DEPLOY_WATCH_TIMEOUT_MS = 10 * 60 * 1000;
+const scopedPages = ['telemetry','maintenance','events','reboots','logs'];
 const categoryLabels = { system:'System', player:'Players', health:'Health', update:'Updates' };
 const icons = {
   dashboard: '<rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/>',
   telemetry: '<path d="M4 20V13m5 7V7m6 13V3m5 17V10"/>',
+  logs: '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="m7 9 3 3-3 3m5 0h5"/>',
   events: '<rect x="4" y="4" width="16" height="17" rx="2"/><path d="M8 2v4m8-4v4M4 10h16m-12 4h8m-8 3h5"/>',
   maintenance: '<path d="m14 6 4 4m-2-7a6 6 0 0 0-7 8L3 17a3 3 0 0 0 4 4l6-6a6 6 0 0 0 8-7l-4 4-5-5Z"/>',
   reboots: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l4 2M5 4l-2 2m16-2 2 2"/>',
@@ -46,6 +48,7 @@ const pages = {
   integrations: ['Integrations', 'Connect Discord and other alert destinations.'],
   reboots: ['Reboots', 'Schedule per-server restarts with predictable timezone rules.'],
   backups: ['Backups', 'Protect server data with verified, versioned backup bundles.'],
+  logs: ['Logs', 'Tail and follow a server container\'s logs.'],
 };
 const discordStatusCopy = {
   not_connected: ['Not connected', 'unknown'],
@@ -86,7 +89,7 @@ function parseLocationHash(hash) {
       return {page:'servers', integrationView:'hub', serverId, scoped:true, malformed: !serverId || view.includes('/')};
     } catch { return {page:'servers', integrationView:'hub', serverId:'', scoped:true, malformed:true}; }
   }
-  if (['telemetry','maintenance','events','reboots'].includes(pageKey)) {
+  if (scopedPages.includes(pageKey)) {
     const query = String(hash).split('?').slice(1).join('?');
     if (query) {
       const params = new URLSearchParams(query);
@@ -107,7 +110,7 @@ function applyRouteScope() {
   state.routeScope = route.scoped === true;
   if (route.page === 'servers' && can('telemetry')) state.page = 'servers';
   if (state.routeScope) state.pageServers[route.page] = route.serverId;
-  else if (state.pageServers[state.page] && route.page === state.page && ['telemetry','maintenance','events','reboots'].includes(state.page)) {
+  else if (state.pageServers[state.page] && route.page === state.page && scopedPages.includes(state.page)) {
     state.routeScope = true;
     history.replaceState(null, '', scopedHash(state.page, state.pageServers[state.page]));
   }
@@ -468,6 +471,7 @@ async function api(path, options = {}) {
   return data;
 }
 function clearProtectedState() {
+  stopLogStream();
   state.routeError = '';
   state.deletions = {};
   state.epoch++;
@@ -905,7 +909,7 @@ function serverOverview() {
   ].filter(Boolean).join('');
   const engine = server.metrics?.engineReady;
   const evidence = engine && metricValue(server, 'engineReady') != null ? `<p>Engine readiness: ${metricValue(server, 'engineReady') === 1 ? 'Ready' : 'Not ready'}</p>` : '';
-  const links = ['telemetry','maintenance','events','reboots']
+  const links = scopedPages
     .filter((page) => can(page))
     .map((page) => `<a href="${escapeHTML(scopedHash(page, selected.id))}">${pages[page][0]}</a>`)
     .join('');
@@ -1338,7 +1342,7 @@ async function previewReboot() {
   }
 }
 function navHTML() {
-  return Object.entries(pages).filter(([page]) => page !== 'servers' && can(page)).map(([page,[label]])=>`<a href="${escapeHTML(['telemetry','maintenance','events','reboots'].includes(page) ? scopedHash(page, state.pageServers[page] || '') : `#${page}`)}" data-testid="nav-${page}" title="${escapeHTML(label)}" ${page===state.page?'aria-current="page"':''}>${icon(page)}<span class="nav-label">${escapeHTML(label)}</span></a>`).join('');
+  return Object.entries(pages).filter(([page]) => page !== 'servers' && can(page)).map(([page,[label]])=>`<a href="${escapeHTML(scopedPages.includes(page) ? scopedHash(page, state.pageServers[page] || '') : `#${page}`)}" data-testid="nav-${page}" title="${escapeHTML(label)}" ${page===state.page?'aria-current="page"':''}>${icon(page)}<span class="nav-label">${escapeHTML(label)}</span></a>`).join('');
 }
 function render() {
   if (state.authRequired) { lockedState(); return; }
@@ -1352,14 +1356,15 @@ function render() {
   $('#page-title').textContent = title;
   $('#page-description').textContent = description;
   $('#navigation').innerHTML = navHTML();
-  const individual = state.page === 'telemetry' || state.page === 'maintenance';
+  const individual = ['telemetry','maintenance','logs'].includes(state.page);
   $('#server-filter').innerHTML = `${individual && state.servers.length ? '' : '<option value="">All servers</option>'}${state.servers.map((server)=>`<option value="${escapeHTML(server.id)}">${escapeHTML(serverLabel(server))}</option>`).join('')}`;
   $('#server-filter').value = individual ? selectedServer()?.id || '' : state.serverId;
   $('#server-filter').disabled = !state.servers.length;
   $('#server-filter').hidden = ['servers','users','integrations','reboots','backups'].includes(state.page);
   const backupActions = state.page === 'backups' && can('backups') && !state.backupView.startsWith('settings') ? `<button class="primary" data-action="run-backup" data-testid="run-backup-header">${icon('upload')}Run backup now</button><button class="icon-button" data-action="backups-settings" data-testid="backups-settings" aria-label="Backup settings" title="Backup settings">${icon('settings')}</button>` : '';
   $('#backup-page-actions').innerHTML = backupActions;
-  $('#content').innerHTML = `${state.routeError ? `<p class="notice error" role="alert" data-testid="route-error">${escapeHTML(state.routeError)}</p>` : ''}${({servers:serverOverview,dashboard,telemetry,events:eventsPage,maintenance,users:usersPage,integrations:integrationsPage,reboots:rebootsPage,backups:backupsPage})[state.page]()}`;
+  $('#content').innerHTML = `${state.routeError ? `<p class="notice error" role="alert" data-testid="route-error">${escapeHTML(state.routeError)}</p>` : ''}${({servers:serverOverview,dashboard,telemetry,events:eventsPage,maintenance,users:usersPage,integrations:integrationsPage,reboots:rebootsPage,backups:backupsPage,logs:logsPage})[state.page]()}`;
+  syncLogStream();
   for (const key of openCharts) {
     const disclosure = document.querySelector(`details[data-chart="${CSS.escape(key)}"]`);
     if (disclosure) disclosure.open = true;
@@ -1392,6 +1397,115 @@ function connection(failed = !$('#error-banner').hidden) {
   $('#updated-at').textContent = state.lastUpdated ? `Updated ${date(state.lastUpdated,true)}` : 'Waiting for first update';
   $('#pause').textContent = state.paused ? 'Resume updates' : 'Pause updates';
   $('#pause').setAttribute('aria-pressed',String(state.paused));
+}
+const LOG_VIEW_MAX_LINES = 5000;
+state.logView = {container:'server', tail:500, follow:true, previous:false, lines:[], pending:0, paused:false, scrollTop:0, status:'', key:'', controller:null};
+function logsPage() {
+  const server = selectedServer();
+  if (!server) return emptyState();
+  const view = state.logView;
+  const stopped = server.status === 'stopped';
+  const select = (id, label, options, value) => `<label class="log-control">${label}<select id="${id}" data-testid="${id}">${options.map(([v, text]) => `<option value="${v}" ${String(v) === String(value) ? 'selected' : ''}>${text}</option>`).join('')}</select></label>`;
+  const toggle = (id, label, checked, disabled = false) => `<label class="log-control"><input type="checkbox" id="${id}" data-testid="${id}" ${checked ? 'checked' : ''} ${disabled ? 'disabled' : ''}>${label}</label>`;
+  return `<section class="panel"><div class="panel-heading"><div><h2>${escapeHTML(serverLabel(server))}</h2><p data-testid="log-stream-status" id="log-stream-status">${escapeHTML(stopped ? 'The server is stopped. Start it to read its logs.' : view.status)}</p></div><div class="toolbar"><span id="log-stream-chip">${logChip()}</span><button data-action="log-pause" data-testid="log-pause">Pause</button><button data-action="log-reconnect" data-testid="log-reconnect" ${stopped ? 'disabled' : ''}>${icon('refresh')}Reconnect</button><button data-action="log-download" data-testid="log-download">${icon('download')}Download</button></div></div><div class="toolbar log-controls">${select('log-container', 'Container', [['server','Game server'],['metrics','Metrics sidecar']], view.container)}${select('log-tail', 'Lines', [[100,'Last 100'],[500,'Last 500'],[1000,'Last 1,000'],[5000,'Last 5,000']], view.tail)}${toggle('log-follow', 'Follow live', view.follow && !view.previous, view.previous)}${toggle('log-previous', 'Previous container', view.previous)}</div><pre class="log-console log-stream" id="log-stream-output" tabindex="0" aria-label="Container logs" aria-live="off" data-testid="log-stream-output">${escapeHTML(view.lines.slice(0, view.lines.length - view.pending).join('\n'))}</pre><p class="inline-note">Follow closes after 15 minutes. Logs can include join codes.</p></section>`;
+}
+function logChip() {
+  const view = state.logView;
+  if (!view.paused) return '';
+  return `<button class="primary" data-action="log-resume" data-testid="log-resume">${view.pending ? `${number(view.pending)} new lines · ` : 'Paused · '}Resume</button>`;
+}
+function logOutputAtBottom(element) { return element.scrollHeight - element.scrollTop - element.clientHeight < 4; }
+function updateLogChrome() {
+  const chip = $('#log-stream-chip');
+  if (chip) chip.innerHTML = logChip();
+  const status = $('#log-stream-status');
+  if (status) status.textContent = state.logView.status;
+}
+function resumeLogView() {
+  Object.assign(state.logView, {paused:false, pending:0});
+  render();
+}
+function stopLogStream() {
+  state.logView.controller?.abort();
+  state.logView.controller = null;
+  state.logView.key = '';
+}
+function syncLogStream() {
+  const view = state.logView;
+  const server = selectedServer();
+  if (state.page !== 'logs' || !server || server.status === 'stopped' || !can('logs')) {
+    if (view.controller) stopLogStream();
+    return;
+  }
+  const output = $('#log-stream-output');
+  if (output) output.scrollTop = view.paused ? view.scrollTop : output.scrollHeight;
+  const params = new URLSearchParams({container:view.container, tailLines:String(view.tail)});
+  params.set(view.previous ? 'previous' : 'follow', '1');
+  const url = `/api/servers/${encodeURIComponent(server.id)}/logs/stream?${params}`;
+  if (view.key === url) return;
+  stopLogStream();
+  const controller = new AbortController();
+  Object.assign(view, {key:url, controller, lines:[], pending:0, paused:false, scrollTop:0, status:'Connecting…'});
+  if (output) output.textContent = '';
+  updateLogChrome();
+  readLogStream(url, controller.signal).catch((error) => {
+    if (controller.signal.aborted) return;
+    view.status = `Could not read logs: ${error.message}`;
+    updateLogChrome();
+  }).finally(() => { if (view.controller === controller) view.controller = null; });
+}
+async function readLogStream(url, signal) {
+  const view = state.logView;
+  let token = '';
+  if (state.authMode !== 'oidc') {
+    try { token = sessionStorage.getItem(tokenKey) || ''; } catch {}
+  }
+  const response = await fetch(url, {credentials:'same-origin', signal, headers:{'Accept':'text/event-stream', ...(token ? {'Authorization':`Bearer ${token}`} : {})}});
+  if (response.status === 401) { requireLogin(); throw new Error('Sign in is required.'); }
+  if (!response.ok) {
+    let message = `request failed (${response.status})`;
+    try { message = (await response.json()).error || message; } catch {}
+    throw new Error(message);
+  }
+  view.status = view.previous ? 'Reading the previous container…' : view.follow ? 'Following live' : 'Reading…';
+  updateLogChrome();
+  const reader = response.body.pipeThrough(new TextDecoderStream()).getReader();
+  let buffer = '';
+  for (;;) {
+    const {value, done} = await reader.read();
+    if (done) break;
+    buffer += value;
+    const events = buffer.split('\n\n');
+    buffer = events.pop();
+    const lines = [];
+    for (const block of events) {
+      const name = block.match(/^event: (.*)$/m)?.[1] || 'message';
+      const data = block.split('\n').filter((line) => line.startsWith('data: ')).map((line) => line.slice(6)).join('\n');
+      if (name === 'message' && block.includes('data: ')) lines.push(data);
+      if (name === 'end') {
+        const end = JSON.parse(data || '{}');
+        view.status = ({timeout:'Follow stopped after 15 minutes. Reconnect to keep following.', error:`Could not read logs: ${end.error || 'unknown error'}`})[end.reason] || (view.follow && !view.previous ? 'Stream ended. The container may have restarted. Reconnect to follow the new one.' : 'End of log.');
+      }
+    }
+    appendLogLines(lines);
+    updateLogChrome();
+  }
+}
+function appendLogLines(lines) {
+  if (!lines.length) return;
+  const view = state.logView;
+  view.lines.push(...lines);
+  const overflow = view.lines.length - LOG_VIEW_MAX_LINES;
+  if (overflow > 0) view.lines.splice(0, overflow);
+  const output = $('#log-stream-output');
+  if (view.paused) {
+    view.pending = Math.min(view.pending + lines.length, view.lines.length);
+    return;
+  }
+  if (!output) return;
+  if (overflow > 0) output.textContent = view.lines.join('\n');
+  else output.append(`${output.textContent ? '\n' : ''}${lines.join('\n')}`);
+  output.scrollTop = output.scrollHeight;
 }
 async function loadLogs(signal) {
   if (!can('logs')) return;
@@ -2133,7 +2247,7 @@ async function handleAction(event) {
   const button = event.target.closest('button[data-action]');
   if (!button || button.disabled) return;
   const action = button.dataset.action;
-  const permission = {'add-server':'create', 'edit-settings':'maintenance', 'add-admin-id':'maintenance', restart:'restart', stop:'stop', start:'start', update:'update', 'check-update':'updateCheck', 'view-events':'events', 'event-category':'events', 'select-event':'events', 'copy-endpoint':'maintenance', 'copy-event':'events', 'export-events':'events', 'load-older-events':'events', 'export-telemetry':'telemetry', 'export-logs':'logs', 'refresh-logs':'logs', 'add-reboot':'reboots', 'edit-reboot':'reboots', 'delete-reboot':'reboots', 'add-daily-time':'reboots', 'remove-daily-time':'reboots', 'preview-reboot':'reboots', 'backups-settings':'backups', 'run-backup':'backups', 'add-backup-schedule':'backups', 'edit-backup-schedule':'backups', 'delete-backup-schedule':'backups', 'run-scheduled-backup':'backups', 'run-scheduled-backup-menu':'backups', 'delete-backup-schedule-menu':'backups', 'backup-details':'backups', 'download-backup':'backups', 'retry-backup':'backups', 'new-backup-profile':'backups', 'delete-backup-profile':'backups', 'edit-backup-profile':'backups', 'import-backup-profile':'backups', 'export-backup-profile':'backups', 'create-server-from-backup':'backups', 'restore-server':'maintenance'}[action];
+  const permission = {'add-server':'create', 'edit-settings':'maintenance', 'add-admin-id':'maintenance', restart:'restart', stop:'stop', start:'start', update:'update', 'check-update':'updateCheck', 'view-events':'events', 'event-category':'events', 'select-event':'events', 'copy-endpoint':'maintenance', 'copy-event':'events', 'export-events':'events', 'load-older-events':'events', 'export-telemetry':'telemetry', 'export-logs':'logs', 'refresh-logs':'logs', 'log-reconnect':'logs', 'log-pause':'logs', 'log-resume':'logs', 'log-download':'logs', 'add-reboot':'reboots', 'edit-reboot':'reboots', 'delete-reboot':'reboots', 'add-daily-time':'reboots', 'remove-daily-time':'reboots', 'preview-reboot':'reboots', 'backups-settings':'backups', 'run-backup':'backups', 'add-backup-schedule':'backups', 'edit-backup-schedule':'backups', 'delete-backup-schedule':'backups', 'run-scheduled-backup':'backups', 'run-scheduled-backup-menu':'backups', 'delete-backup-schedule-menu':'backups', 'backup-details':'backups', 'download-backup':'backups', 'retry-backup':'backups', 'new-backup-profile':'backups', 'delete-backup-profile':'backups', 'edit-backup-profile':'backups', 'import-backup-profile':'backups', 'export-backup-profile':'backups', 'create-server-from-backup':'backups', 'restore-server':'maintenance'}[action];
   if (permission && !can(permission)) return;
   try {
     switch (action) {
@@ -2240,6 +2354,10 @@ async function handleAction(event) {
       }
       case 'export-telemetry': exportCSV('rsdw-telemetry.csv',telemetryRows(),['timestamp','metric','value','observedAt','status','reason','unit','source']); break;
       case 'export-logs': download('rsdw-server.log',filteredLogs(),'text/plain;charset=utf-8'); notice('Log download ready.'); break;
+      case 'log-reconnect': state.logView.key = ''; syncLogStream(); break;
+      case 'log-pause': state.logView.paused = true; updateLogChrome(); break;
+      case 'log-resume': resumeLogView(); break;
+      case 'log-download': download(`${selectedServer()?.id || 'server'}-${state.logView.container}.log`, state.logView.lines.join('\n'), 'text/plain;charset=utf-8'); break;
       case 'refresh-logs': button.disabled = true; await loadLogs(); render(); notice('Server logs refreshed.'); break;
       case 'check-update': {
         button.disabled = true;
@@ -2318,9 +2436,17 @@ function handleChange(event) {
   if (event.target.id === 'display-timezone') { saveDisplayTimezone(event.target.value); render(); }
   if (event.target.id === 'backup-profile-type') { state.backupProfileType = event.target.value; render(); }
   if (event.target.name === 'profileName' || event.target.name === 'serverType' || event.target.closest?.('[data-profile-item-row]')) updateBackupProfilePreview();
+  if (['log-container','log-tail','log-follow','log-previous'].includes(event.target.id)) {
+    const view = state.logView;
+    if (event.target.id === 'log-container') view.container = event.target.value;
+    if (event.target.id === 'log-tail') view.tail = Number(event.target.value);
+    if (event.target.id === 'log-follow') view.follow = event.target.checked;
+    if (event.target.id === 'log-previous') view.previous = event.target.checked;
+    render();
+  }
   if (event.target.id === 'server-filter') {
     state.serverId = state.pageServers[state.page] = event.target.value; selectTelemetry(selectedServer()?.id); state.logs = ''; state.selectedEventId = '';
-    if (['telemetry','maintenance','events','reboots'].includes(state.page)) {
+    if (scopedPages.includes(state.page)) {
       state.routeScope = Boolean(state.serverId);
       history.replaceState(null, '', scopedHash(state.page));
     }
@@ -2370,6 +2496,11 @@ document.addEventListener('input',(event) => {
   if (event.target.closest('[data-profile-item-row]')) updateBackupProfilePreview();
 });
 document.addEventListener('change',handleChange);
+document.addEventListener('scroll', (event) => {
+  if (event.target.id !== 'log-stream-output') return;
+  state.logView.scrollTop = event.target.scrollTop;
+  if (!state.logView.paused && !logOutputAtBottom(event.target)) { state.logView.paused = true; updateLogChrome(); }
+}, true);
 window.addEventListener('hashchange',navigate);
 document.addEventListener('visibilitychange',() => {
   if (document.hidden) return;
