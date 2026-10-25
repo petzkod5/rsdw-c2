@@ -486,6 +486,7 @@ input[type=file]::file-selector-button { font: inherit; border: 1px solid var(--
   #toast { left: 16px; right: 16px; bottom: 16px; max-width: none; }
 }
 @media (max-width: 520px) {
+  nav { overflow-x: auto; }
   nav a { position: relative; min-width: var(--control-min-size); min-height: var(--control-min-size); justify-content: center; }
   .nav-label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; }
 }
