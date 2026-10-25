@@ -1472,6 +1472,7 @@ async function readLogStream(url, signal) {
   updateLogChrome();
   const reader = response.body.pipeThrough(new TextDecoderStream()).getReader();
   let buffer = '';
+  let ended = false;
   for (;;) {
     const {value, done} = await reader.read();
     if (done) break;
@@ -1484,11 +1485,16 @@ async function readLogStream(url, signal) {
       const data = block.split('\n').filter((line) => line.startsWith('data: ')).map((line) => line.slice(6)).join('\n');
       if (name === 'message' && block.includes('data: ')) lines.push(data);
       if (name === 'end') {
+        ended = true;
         const end = JSON.parse(data || '{}');
         view.status = ({timeout:'Follow stopped after 15 minutes. Reconnect to keep following.', error:`Could not read logs: ${end.error || 'unknown error'}`})[end.reason] || (view.follow && !view.previous ? 'Stream ended. The container may have restarted. Reconnect to follow the new one.' : 'End of log.');
       }
     }
     appendLogLines(lines);
+    updateLogChrome();
+  }
+  if (!ended) {
+    view.status = view.follow && !view.previous ? 'Connection closed. Reconnect to keep following.' : 'Connection closed before the log finished. Reconnect to read it again.';
     updateLogChrome();
   }
 }

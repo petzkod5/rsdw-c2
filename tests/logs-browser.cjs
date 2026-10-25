@@ -96,6 +96,35 @@ async function run() {
     assert.equal(streams.length, opened + 1, 'returning to logs did not open a fresh stream');
     assert.doesNotMatch(await output(), /batch 8/, 'stale lines stayed after returning to logs');
 
+    // Feed the next stream through fetch in hand-picked chunks so events split across reads.
+    const streamChunks = (chunks) => page.evaluate((chunks) => {
+      const realFetch = window.fetch;
+      window.fetch = (input, init) => {
+        if (!String(input).includes('/logs/stream')) return realFetch(input, init);
+        window.fetch = realFetch;
+        const encoder = new TextEncoder();
+        const body = new ReadableStream({async pull(controller) {
+          const chunk = chunks.shift();
+          if (chunk === undefined) return controller.close();
+          await new Promise(resolve => setTimeout(resolve, 20));
+          controller.enqueue(encoder.encode(chunk));
+        }});
+        return Promise.resolve(new Response(body, {status:200, headers:{'Content-Type':'text/event-stream'}}));
+      };
+    }, chunks);
+    const statusText = () => page.getByTestId('log-stream-status').innerText();
+
+    await streamChunks([': stream open\n\ndata: chunk li', 'ne A\n', '\ndata: chunk line B\n\nevent: e', 'nd\ndata: {"reason":"tim', 'eout"}\n', '\n']);
+    await page.getByTestId('log-reconnect').click();
+    await page.waitForFunction(() => document.querySelector('[data-testid="log-stream-status"]')?.textContent.includes('Follow stopped after 15 minutes'));
+    assert.match(await output(), /chunk line A\nchunk line B$/, 'events split across reads were lost or garbled');
+
+    await streamChunks([': stream open\n\n', 'data: cut off line\n\n']);
+    await page.getByTestId('log-reconnect').click();
+    await page.waitForFunction(() => document.querySelector('[data-testid="log-stream-output"]').textContent.includes('cut off line'));
+    await page.waitForFunction(() => !state.logView.controller);
+    assert.equal(await statusText(), 'Connection closed. Reconnect to keep following.', 'a stream that ended without an end event still claimed to follow');
+
     role = 'viewer';
     await page.goto('http://logs.test/#logs');
     await page.reload();
